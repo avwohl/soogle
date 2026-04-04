@@ -1,0 +1,45 @@
+{% extends "search/base.html" %}
+{% block title %}Submit a site{% endblock %}
+
+{% block body %}
+<div class="container">
+
+  <div class="header">
+    <a href="{% url 'index' %}" class="logo"><span>S</span>oogle</a>
+    <form action="{% url 'search' %}" method="get" style="flex:1;">
+      <div class="search-box">
+        <input type="text" name="q" placeholder="Search packages...">
+        <button type="submit">Search</button>
+      </div>
+    </form>
+  </div>
+
+  <h1 style="font-size: 24px; margin-bottom: 8px;">Submit a Smalltalk code source</h1>
+  <p style="color: var(--muted); margin-bottom: 24px;">
+    Know of a site with Smalltalk source code that we haven't indexed yet?
+    Let us know and we'll check it out.
+  </p>
+
+  <form method="post" action="{% url 'submit_site' %}" style="max-width: 560px;">
+    {% csrf_token %}
+
+    <div style="margin-bottom: 16px;">
+      <label for="url" style="display: block; font-weight: 600; margin-bottom: 4px;">URL</label>
+      <input type="url" id="url" name="url" required placeholder="https://example.com/smalltalk-code"
+             style="width: 100%; padding: 10px 14px; font-size: 15px; border: 1px solid var(--border); border-radius: 6px;">
+    </div>
+
+    <div style="margin-bottom: 16px;">
+      <label for="comment" style="display: block; font-weight: 600; margin-bottom: 4px;">Comment <span style="font-weight: normal; color: var(--muted);">(optional)</span></label>
+      <textarea id="comment" name="comment" rows="4" placeholder="What kind of Smalltalk code is there? Which dialect?"
+                style="width: 100%; padding: 10px 14px; font-size: 15px; border: 1px solid var(--border); border-radius: 6px; resize: vertical;"></textarea>
+    </div>
+
+    <button type="submit"
+            style="background: var(--accent); color: #fff; border: none; padding: 10px 28px; font-size: 15px; border-radius: 6px; cursor: pointer;">
+      Submit
+    </button>
+  </form>
+
+</div>
+{% endblock %}

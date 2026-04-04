@@ -1,0 +1,38 @@
+● Everything is working. Here's what was built:                                                  
+                                                   
+  Files created                                                                                  
+                                                                                         
+  scrape/                                                                                        
+      __init__.py                               
+      __main__.py        CLI entry point                                                         
+      config.py          DB creds, GitHub token, rate limits                                     
+      db.py              Connection, scrape_raw helpers, atomic transaction support
+      github.py          GitHub API scraper (date-segmented search, rate-limit aware)            
+      web.py             SqueakSource, SmalltalkHub, Rosetta Code scrapers               
+      processor.py       scrape_raw → packages (dialect detection, auto-categorization, atomic   
+  upsert)                                                                                
+  requirements.txt                                                                               
+                                                                                                 
+  CLI                                           
+                                                                                                 
+  python -m scrape github [--incremental]     # GitHub (needs GITHUB_TOKEN env var)              
+  python -m scrape web squeaksource           # SqueakSource                                     
+  python -m scrape web smalltalkhub           # SmalltalkHub                                     
+  python -m scrape web rosettacode            # Rosetta Code                                     
+  python -m scrape web all                    # All web sources                                  
+  python -m scrape process [--limit N]        # Process staging → packages                       
+  python -m scrape status                     # Pipeline stats                                   
+                                                                                                 
+  Verified end-to-end                                                                            
+                                                                                                 
+  Rosetta Code scrape: 325 found, 316 saved, 316 processed into packages, 0 errors. The full     
+  pipeline works: scrape → scrape_raw staging → atomic upsert into packages + package_categories.
+                                                                                                 
+  GitHub scraper key features                                                                    
+   
+  - Date segmentation: splits language:Smalltalk created:YYYY..YYYY queries to get past the      
+  1000-result limit, recursively halving date ranges when needed  
+  - Rate-limit awareness: sleeps when hitting GitHub's 30 req/min search limit, auto-retries     
+  after rate-limit reset                                                                         
+  - Change detection: SHA-256 checksums skip re-processing unchanged repos
+  - Incremental mode: --incremental only fetches repos updated in the last 30 days               

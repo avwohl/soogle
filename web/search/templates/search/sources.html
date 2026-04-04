@@ -1,0 +1,34 @@
+{% extends "search/base.html" %}
+{% block title %}Sources{% endblock %}
+
+{% block body %}
+<div class="container wide">
+
+  <div class="header">
+    <a href="{% url 'index' %}" class="logo"><span>S</span>oogle</a>
+    <form action="{% url 'search' %}" method="get" style="flex:1;">
+      <div class="search-box">
+        <input type="text" name="q" placeholder="Search packages...">
+        <button type="submit">Search</button>
+      </div>
+    </form>
+  </div>
+
+  <h1 style="font-size: 24px; margin-bottom: 8px;">Sources</h1>
+  <p style="color: var(--muted); margin-bottom: 24px;">
+    {{ sites|length }} site{{ sites|length|pluralize }} we index for Smalltalk code.
+  </p>
+
+  {% for site in sites %}
+  <div class="result">
+    <h3><a href="{% url 'search' %}?site={{ site.name }}">{{ site.display_name }}</a></h3>
+    <div class="url"><a href="{{ site.base_url }}">{{ site.base_url }}</a></div>
+    <div class="meta">
+      <span class="tag">{{ site.site_type }}</span>
+      <span class="tag">{{ site.package_count }} package{{ site.package_count|pluralize }}</span>
+    </div>
+  </div>
+  {% endfor %}
+
+</div>
+{% endblock %}

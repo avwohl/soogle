@@ -1,0 +1,79 @@
+{% extends "search/base.html" %}
+{% block title %}Videos{% endblock %}
+
+{% block body %}
+<div class="container wide">
+  <div class="header">
+    <a href="{% url 'index' %}" class="logo"><span>S</span>oogle</a>
+    <form action="{% url 'videos' %}" method="get">
+      <div class="search-box">
+        <input type="text" name="q" value="{{ q }}" placeholder="Search videos...">
+        <button type="submit">Search</button>
+      </div>
+      {% if dialect %}<input type="hidden" name="dialect" value="{{ dialect }}">{% endif %}
+      {% if sort and sort != "views" %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+    </form>
+  </div>
+
+  <div class="filters">
+    <select name="dialect" onchange="location.href='{% url 'videos' %}?q={{ q }}&sort={{ sort }}&dialect='+this.value">
+      <option value="">All dialects</option>
+      {% for d in dialects %}
+      <option value="{{ d }}" {% if d == dialect %}selected{% endif %}>{{ d }}</option>
+      {% endfor %}
+    </select>
+    <select name="sort" onchange="location.href='{% url 'videos' %}?q={{ q }}&dialect={{ dialect }}&sort='+this.value">
+      <option value="views" {% if sort == "views" %}selected{% endif %}>Most viewed</option>
+      <option value="newest" {% if sort == "newest" %}selected{% endif %}>Newest</option>
+      <option value="title" {% if sort == "title" %}selected{% endif %}>Title</option>
+    </select>
+  </div>
+
+  <p class="result-info">{{ paginator.count }} video{{ paginator.count|pluralize }}</p>
+
+  {% if page.object_list %}
+  <div class="video-grid">
+    {% for v in page %}
+    <a href="{{ v.url }}" class="video-card" target="_blank" rel="noopener">
+      {% if v.thumbnail_url %}
+      <img src="{{ v.thumbnail_url }}" alt="{{ v.title }}" class="video-thumb" loading="lazy">
+      {% else %}
+      <div class="video-thumb video-thumb-placeholder"></div>
+      {% endif %}
+      {% if v.duration_seconds %}
+      <span class="video-duration">{% widthratio v.duration_seconds 60 1 %}m</span>
+      {% endif %}
+      <div class="video-info">
+        <h3>{{ v.title }}</h3>
+        {% if v.channel_name %}<span class="video-channel">{{ v.channel_name }}</span>{% endif %}
+        <span class="video-meta">
+          {% if v.view_count %}{{ v.view_count|floatformat:0 }} views{% endif %}
+          {% if v.dialect and v.dialect != "unknown" %} &middot; <span class="tag">{{ v.dialect }}</span>{% endif %}
+        </span>
+      </div>
+    </a>
+    {% endfor %}
+  </div>
+  {% else %}
+  <p style="text-align: center; color: var(--muted); margin-top: 40px;">No videos found.</p>
+  {% endif %}
+
+  {% if paginator.num_pages > 1 %}
+  <div class="pagination">
+    {% if page.has_previous %}
+    <a href="?q={{ q }}&dialect={{ dialect }}&sort={{ sort }}&page={{ page.previous_page_number }}">Prev</a>
+    {% endif %}
+    {% for num in paginator.page_range %}
+      {% if num == page.number %}
+        <span class="current">{{ num }}</span>
+      {% elif num > page.number|add:"-3" and num < page.number|add:"3" %}
+        <a href="?q={{ q }}&dialect={{ dialect }}&sort={{ sort }}&page={{ num }}">{{ num }}</a>
+      {% endif %}
+    {% endfor %}
+    {% if page.has_next %}
+    <a href="?q={{ q }}&dialect={{ dialect }}&sort={{ sort }}&page={{ page.next_page_number }}">Next</a>
+    {% endif %}
+  </div>
+  {% endif %}
+</div>
+{% endblock %}

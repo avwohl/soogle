@@ -1,0 +1,112 @@
+{% extends "search/base.html" %}
+{% block title %}{% if q %}{{ q }} - {% endif %}Search{% endblock %}
+
+{% block body %}
+<div class="container wide">
+
+  <div class="header">
+    <a href="{% url 'index' %}" class="logo"><span>S</span>oogle</a>
+    <form action="{% url 'search' %}" method="get" style="flex:1;">
+      <div class="search-box">
+        <input type="text" name="q" value="{{ q }}" placeholder="Search packages...">
+        <button type="submit">Search</button>
+      </div>
+      {% if dialect %}<input type="hidden" name="dialect" value="{{ dialect }}">{% endif %}
+      {% if site %}<input type="hidden" name="site" value="{{ site }}">{% endif %}
+      {% if category %}<input type="hidden" name="category" value="{{ category }}">{% endif %}
+      {% if sort and sort != "relevance" %}<input type="hidden" name="sort" value="{{ sort }}">{% endif %}
+    </form>
+  </div>
+
+  <form action="{% url 'search' %}" method="get" class="filters">
+    <input type="hidden" name="q" value="{{ q }}">
+
+    <select name="dialect" onchange="this.form.submit()">
+      <option value="">All dialects</option>
+      {% for d in dialects %}
+      <option value="{{ d }}" {% if d == dialect %}selected{% endif %}>{{ d }}</option>
+      {% endfor %}
+    </select>
+
+    <select name="site" onchange="this.form.submit()">
+      <option value="">All sources</option>
+      {% for s in sites %}
+      <option value="{{ s.name }}" {% if s.name == site %}selected{% endif %}>{{ s.display_name }}</option>
+      {% endfor %}
+    </select>
+
+    <select name="category" onchange="this.form.submit()">
+      <option value="">All categories</option>
+      {% for c in categories %}
+      <option value="{{ c.name }}" {% if c.name == category %}selected{% endif %}>{{ c.display_name }}</option>
+      {% endfor %}
+    </select>
+
+    <select name="sort" onchange="this.form.submit()">
+      <option value="relevance" {% if sort == "relevance" %}selected{% endif %}>Sort: Relevance</option>
+      <option value="stars" {% if sort == "stars" %}selected{% endif %}>Sort: Stars</option>
+      <option value="updated" {% if sort == "updated" %}selected{% endif %}>Sort: Recently updated</option>
+      <option value="name" {% if sort == "name" %}selected{% endif %}>Sort: Name</option>
+    </select>
+  </form>
+
+  <div class="result-info">
+    {% if q %}
+    About {{ paginator.count }} result{{ paginator.count|pluralize }} for <b>{{ q }}</b>
+    {% else %}
+    {{ paginator.count }} package{{ paginator.count|pluralize }}
+    {% endif %}
+    {% if page.number > 1 %} &mdash; page {{ page.number }}{% endif %}
+  </div>
+
+  {% for pkg in page %}
+  <div class="result">
+    <h3><a href="{% url 'package_detail' pkg.pk %}">{{ pkg.name }}</a></h3>
+    {% if pkg.url %}
+    <div class="url"><a href="{{ pkg.url }}">{{ pkg.url }}</a></div>
+    {% endif %}
+    {% if pkg.description %}
+    <div class="snippet">{{ pkg.description|truncatewords:40 }}</div>
+    {% endif %}
+    <div class="meta">
+      <span class="tag">{{ pkg.site.display_name }}</span>
+      {% if pkg.dialect and pkg.dialect != "unknown" %}
+      <span class="tag">{{ pkg.dialect }}</span>
+      {% endif %}
+      {% if pkg.stars %}
+      <span class="tag">{{ pkg.stars }} stars</span>
+      {% endif %}
+      {% if pkg.license %}
+      <span class="tag">{{ pkg.license }}</span>
+      {% endif %}
+    </div>
+  </div>
+  {% empty %}
+  <p style="color: var(--muted); padding: 40px 0; text-align: center;">
+    {% if q %}No packages found for <b>{{ q }}</b>. Try a different search term.
+    {% else %}No packages in the database yet.{% endif %}
+  </p>
+  {% endfor %}
+
+  {% if paginator.num_pages > 1 %}
+  <div class="pagination">
+    {% if page.has_previous %}
+    <a href="?q={{ q }}&dialect={{ dialect }}&site={{ site }}&category={{ category }}&sort={{ sort }}&page={{ page.previous_page_number }}">Prev</a>
+    {% endif %}
+
+    {% for num in paginator.page_range %}
+      {% if num == page.number %}
+      <span class="current">{{ num }}</span>
+      {% elif num > page.number|add:"-5" and num < page.number|add:"5" %}
+      <a href="?q={{ q }}&dialect={{ dialect }}&site={{ site }}&category={{ category }}&sort={{ sort }}&page={{ num }}">{{ num }}</a>
+      {% endif %}
+    {% endfor %}
+
+    {% if page.has_next %}
+    <a href="?q={{ q }}&dialect={{ dialect }}&site={{ site }}&category={{ category }}&sort={{ sort }}&page={{ page.next_page_number }}">Next</a>
+    {% endif %}
+  </div>
+  {% endif %}
+
+</div>
+{% endblock %}

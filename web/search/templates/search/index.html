@@ -1,0 +1,47 @@
+{% extends "search/base.html" %}
+{% block title %}Soogle{% endblock %}
+
+{% block body %}
+<div class="container">
+  <div class="home-center">
+    <h1><span>S</span>oogle</h1>
+    <p class="tagline">Search engine for Smalltalk source code</p>
+    <form action="{% url 'search' %}" method="get">
+      <div class="search-box">
+        <input type="text" name="q" placeholder="Search packages, classes, methods..." autofocus>
+        <button type="submit">Search</button>
+      </div>
+    </form>
+
+    <div class="stats">
+      <a href="{% url 'search' %}"><span class="stat-num">{{ stats.packages }}</span> packages</a>
+      <a href="{% url 'videos' %}"><span class="stat-num">{{ stats.videos }}</span> videos</a>
+      <a href="{% url 'sources' %}"><span class="stat-num">{{ stats.sites }}</span> sources</a>
+    </div>
+
+    {% if stats.dialects %}
+    <div class="stats" style="margin-top: 16px;">
+      {% for dialect, count in stats.dialects %}
+      <a href="{% url 'search' %}?dialect={{ dialect }}"><span class="stat-num">{{ count }}</span> {{ dialect }}</a>
+      {% endfor %}
+    </div>
+    {% endif %}
+  </div>
+
+  {% if recent %}
+  <div style="text-align: center; margin-top: 32px;">
+    <h3 style="color: var(--muted); font-size: 14px;">Recently added</h3>
+    <ul class="recent-list">
+      {% for pkg in recent %}
+      <li><a href="{% url 'package_detail' pkg.pk %}">{{ pkg.name }}</a>
+        <span class="tag">{{ pkg.site.display_name }}</span></li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  <div style="text-align: center; margin-top: 24px;">
+    <a href="{% url 'search' %}">Browse all packages</a>
+  </div>
+</div>
+{% endblock %}

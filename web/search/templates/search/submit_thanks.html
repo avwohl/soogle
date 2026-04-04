@@ -1,0 +1,29 @@
+{% extends "search/base.html" %}
+{% block title %}Thanks{% endblock %}
+
+{% block body %}
+<div class="container">
+
+  <div class="header">
+    <a href="{% url 'index' %}" class="logo"><span>S</span>oogle</a>
+    <form action="{% url 'search' %}" method="get" style="flex:1;">
+      <div class="search-box">
+        <input type="text" name="q" placeholder="Search packages...">
+        <button type="submit">Search</button>
+      </div>
+    </form>
+  </div>
+
+  <div style="text-align: center; padding: 60px 0;">
+    <h1 style="font-size: 24px; margin-bottom: 12px;">Thanks for the tip!</h1>
+    <p style="color: var(--muted); margin-bottom: 8px;">
+      We'll review <b>{{ url }}</b> and add it if it has Smalltalk code we can index.
+    </p>
+    <p style="margin-top: 24px;">
+      <a href="{% url 'submit_site' %}">Submit another</a> &middot;
+      <a href="{% url 'index' %}">Back to search</a>
+    </p>
+  </div>
+
+</div>
+{% endblock %}

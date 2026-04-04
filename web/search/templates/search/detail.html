@@ -1,0 +1,132 @@
+{% extends "search/base.html" %}
+{% block title %}{{ pkg.name }}{% endblock %}
+
+{% block body %}
+<div class="container wide">
+
+  <div class="header">
+    <a href="{% url 'index' %}" class="logo"><span>S</span>oogle</a>
+    <form action="{% url 'search' %}" method="get" style="flex:1;">
+      <div class="search-box">
+        <input type="text" name="q" placeholder="Search packages...">
+        <button type="submit">Search</button>
+      </div>
+    </form>
+  </div>
+
+  <div class="detail-header">
+    <h1>{{ pkg.name }}</h1>
+    {% if pkg.url %}
+    <div class="url"><a href="{{ pkg.url }}">{{ pkg.url }}</a></div>
+    {% endif %}
+  </div>
+
+  {% if pkg.description %}
+  <div class="detail-section">
+    <h2>Description</h2>
+    <p>{{ pkg.description }}</p>
+  </div>
+  {% endif %}
+
+  <div class="detail-section">
+    <h2>Details</h2>
+    <dl class="detail-meta">
+      <dt>Source</dt>
+      <dd>{{ pkg.site.display_name }}</dd>
+
+      {% if pkg.dialect and pkg.dialect != "unknown" %}
+      <dt>Dialect</dt>
+      <dd>{{ pkg.dialect }}{% if pkg.dialect_confidence %} ({{ pkg.dialect_confidence }}% confidence){% endif %}</dd>
+      {% endif %}
+
+      {% if pkg.file_format and pkg.file_format != "unknown" %}
+      <dt>File format</dt>
+      <dd>{{ pkg.file_format }}</dd>
+      {% endif %}
+
+      {% if pkg.license %}
+      <dt>License</dt>
+      <dd>{{ pkg.license }}</dd>
+      {% endif %}
+
+      {% if pkg.stars %}
+      <dt>Stars</dt>
+      <dd>{{ pkg.stars }}</dd>
+      {% endif %}
+
+      {% if pkg.forks %}
+      <dt>Forks</dt>
+      <dd>{{ pkg.forks }}</dd>
+      {% endif %}
+
+      {% if pkg.source_created_at %}
+      <dt>Created</dt>
+      <dd>{{ pkg.source_created_at|date:"N j, Y" }}</dd>
+      {% endif %}
+
+      {% if pkg.source_updated_at %}
+      <dt>Updated</dt>
+      <dd>{{ pkg.source_updated_at|date:"N j, Y" }}</dd>
+      {% endif %}
+
+      {% if pkg.topics %}
+      <dt>Topics</dt>
+      <dd>{% for t in pkg.topics %}<span class="tag">{{ t }}</span> {% endfor %}</dd>
+      {% endif %}
+    </dl>
+  </div>
+
+  {% if categories %}
+  <div class="detail-section">
+    <h2>Categories</h2>
+    {% for cat in categories %}
+    <a href="{% url 'search' %}?category={{ cat.name }}" class="tag" style="font-size:14px; padding:4px 10px;">{{ cat.display_name }}</a>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  {% if pkg.readme_excerpt %}
+  <div class="detail-section">
+    <h2>README excerpt</h2>
+    <pre class="code">{{ pkg.readme_excerpt }}</pre>
+  </div>
+  {% endif %}
+
+  {% if classes %}
+  <div class="detail-section">
+    <h2>Classes ({{ classes.count }})</h2>
+    <ul class="class-list">
+      {% for cls in classes %}
+      <li>
+        {{ cls.class_name }}
+        {% if cls.superclass_name %}<span style="color:var(--muted)"> &gt; {{ cls.superclass_name }}</span>{% endif %}
+        {% if cls.is_trait %}<span class="tag">trait</span>{% endif %}
+      </li>
+      {% endfor %}
+    </ul>
+  </div>
+  {% endif %}
+
+  {% if methods %}
+  <div class="detail-section">
+    <h2>Methods ({{ methods.count }})</h2>
+    {% for m in methods %}
+    <div style="margin-bottom: 12px;">
+      <code style="font-size: 14px;">
+        <b>{{ m.class_field.class_name }}</b>{% if m.is_class_side %} class{% endif %} >> <b>{{ m.selector }}</b>
+      </code>
+      {% if m.protocol %}<span class="tag">{{ m.protocol }}</span>{% endif %}
+      {% if m.source_code %}
+      <pre class="code" style="margin-top: 4px;">{{ m.source_code }}</pre>
+      {% endif %}
+    </div>
+    {% endfor %}
+  </div>
+  {% endif %}
+
+  <div style="margin-top: 16px;">
+    <a href="javascript:history.back()">&larr; Back to results</a>
+  </div>
+
+</div>
+{% endblock %}
