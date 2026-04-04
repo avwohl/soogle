@@ -1,5 +1,10 @@
 {% extends "search/base.html" %}
 {% block title %}Sources{% endblock %}
+{% block meta_description %}{{ sites|length }} source sites indexed by Soogle — GitHub, SqueakSource, SmalltalkHub, and more Smalltalk code repositories.{% endblock %}
+{% block canonical %}{{ site_url }}/sources/{% endblock %}
+{% block og_title %}Sources - Soogle{% endblock %}
+{% block og_description %}{{ sites|length }} Smalltalk code repositories indexed by Soogle.{% endblock %}
+{% block og_url %}{{ site_url }}/sources/{% endblock %}
 
 {% block body %}
 <div class="container wide">

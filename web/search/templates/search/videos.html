@@ -1,5 +1,10 @@
 {% extends "search/base.html" %}
-{% block title %}Videos{% endblock %}
+{% block title %}{% if q %}{{ q }} - {% endif %}Smalltalk Videos{% endblock %}
+{% block meta_description %}{% if q %}Smalltalk videos matching "{{ q }}" — {{ paginator.count }} video{{ paginator.count|pluralize }} on Soogle.{% else %}Watch {{ paginator.count }} Smalltalk programming videos — tutorials, conference talks, and demos for Pharo, Squeak, and more.{% endif %}{% endblock %}
+{% block canonical %}{{ site_url }}/videos/{% if q %}?q={{ q }}{% endif %}{% endblock %}
+{% block og_title %}{% if q %}{{ q }} - Smalltalk Videos{% else %}Smalltalk Videos{% endif %}{% endblock %}
+{% block og_description %}{% if q %}Smalltalk videos matching "{{ q }}" on Soogle.{% else %}Watch Smalltalk programming videos — tutorials, conference talks, and demos.{% endif %}{% endblock %}
+{% block og_url %}{{ site_url }}/videos/{% if q %}?q={{ q }}{% endif %}{% endblock %}
 
 {% block body %}
 <div class="container wide">
@@ -29,7 +34,7 @@
     </select>
   </div>
 
-  <p class="result-info">{{ paginator.count }} video{{ paginator.count|pluralize }}</p>
+  <h1 class="result-info">{% if q %}Smalltalk videos matching "{{ q }}" — {% endif %}{{ paginator.count }} video{{ paginator.count|pluralize }}</h1>
 
   {% if page.object_list %}
   <div class="video-grid">

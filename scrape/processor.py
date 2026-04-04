@@ -16,6 +16,26 @@ from . import config, db
 
 log = logging.getLogger(__name__)
 
+# Patterns in name/description that indicate a repo is NOT Smalltalk
+_NOT_SMALLTALK = re.compile(
+    r"(?:"
+    r"\.Net\b|C#|CSharp\b|ASP\.NET|dotnet\b|Xamarin|WPF\b|WinForms|Blazor|MAUI\b"
+    r"|\bUnity\s*(game|project|3D|2D)|\bUnreal\s*Engine"
+    r"|\bSpring\s*Boot|\bLaravel|\bRuby\s*on\s*Rails"
+    r"|\bReact\s*(app|project|Native)|\bAngular\s*(app|project)|\bVue\.js"
+    r"|\bFlutter\b|\bSwiftUI\b|\bKotlin\b|\bNode\.js"
+    r"|\bTensorFlow\b|\bPyTorch\b|\bSolidity\b|\bEthereum\b|\bblockchain\b"
+    r"|\bWordPress\b|\bArduino\b|\bRaspberry\s*Pi"
+    r"|\bAndroid\s*(app|studio)|\biOS\s*(app|swift)"
+    r"|\bdiscord\.net|\bdiscord\s*bot\b.*C#"
+    r")",
+    re.IGNORECASE,
+)
+_HAS_SMALLTALK = re.compile(
+    r"\b(smalltalk|pharo|squeak|cuis|gemstone|visualworks|seaside|gnu.smalltalk)\b",
+    re.IGNORECASE,
+)
+
 
 # ---------------------------------------------------------------------------
 # Dialect detection heuristics
@@ -231,6 +251,24 @@ def process_one(conn, raw_row):
 
     # Dialect detection
     dialect, dialect_confidence = detect_dialect(meta)
+
+    # Quality gate: skip GitHub repos with no signal they're real Smalltalk
+    def _skip_junk(reason):
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_raw SET status='processed', processed_at=NOW() WHERE id=%s",
+                (raw_id,),
+            )
+        conn.commit()
+
+    if site_name == "github" and dialect == "unknown":
+        if not pkg["description"] and not meta.get("stars"):
+            _skip_junk("no description, no stars, no dialect")
+            return
+        text = f'{pkg["name"]} {pkg["description"]}'
+        if meta.get("stars", 0) <= 1 and _NOT_SMALLTALK.search(text) and not _HAS_SMALLTALK.search(text):
+            _skip_junk("non-Smalltalk framework detected")
+            return
 
     # Auto-categorize
     categories = auto_categorize(meta)

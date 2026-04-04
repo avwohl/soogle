@@ -1,7 +1,11 @@
+from django.http import HttpResponse
 from django.shortcuts import render, get_object_or_404, redirect
 from django.core.paginator import Paginator
 from django.db.models import Q, Count
+from django.utils.html import escape as html_escape
 from .models import Package, Category, Site, PackageCategory, PackageClass, PackageMethod, SiteSubmission, Video
+
+SITEMAP_CHUNK = 10000
 
 
 def index(request):
@@ -60,12 +64,8 @@ def search(request):
     elif sort == "name":
         qs = qs.order_by("name")
     else:
-        # Default: name match quality isn't easily sortable with icontains,
-        # so fall back to stars then name
-        if q:
-            qs = qs.order_by("-stars", "name")
-        else:
-            qs = qs.order_by("name")
+        # Default: stars then name — surfaces quality content first
+        qs = qs.order_by("-stars", "name")
 
     paginator = Paginator(qs, 25)
     page = paginator.get_page(page_num)
@@ -181,3 +181,74 @@ def submit_site(request):
             return render(request, "search/submit_thanks.html", {"url": url})
 
     return render(request, "search/submit.html")
+
+
+def robots_txt(request):
+    base = f"{request.scheme}://{request.get_host()}"
+    content = (
+        "User-agent: *\n"
+        "Allow: /\n"
+        "Disallow: /submit/\n"
+        "\n"
+        f"Sitemap: {base}/sitemap.xml\n"
+    )
+    return HttpResponse(content, content_type="text/plain")
+
+
+def sitemap_xml(request):
+    """Sitemap index pointing to section sitemaps."""
+    base = f"{request.scheme}://{request.get_host()}"
+    pkg_count = Package.objects.count()
+    chunks = (pkg_count + SITEMAP_CHUNK - 1) // SITEMAP_CHUNK
+
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>']
+    lines.append('<sitemapindex xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')
+    lines.append(f"  <sitemap><loc>{base}/sitemap-pages.xml</loc></sitemap>")
+    for i in range(1, chunks + 1):
+        lines.append(f"  <sitemap><loc>{base}/sitemap-packages-{i}.xml</loc></sitemap>")
+    lines.append("</sitemapindex>")
+    return HttpResponse("\n".join(lines), content_type="application/xml")
+
+
+def sitemap_pages(request):
+    """Static pages sitemap."""
+    base = f"{request.scheme}://{request.get_host()}"
+    pages = [
+        ("/", "daily", "1.0"),
+        ("/search/", "daily", "0.9"),
+        ("/videos/", "daily", "0.8"),
+        ("/sources/", "weekly", "0.7"),
+    ]
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>']
+    lines.append('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')
+    for path, freq, priority in pages:
+        lines.append(
+            f"  <url><loc>{base}{path}</loc>"
+            f"<changefreq>{freq}</changefreq>"
+            f"<priority>{priority}</priority></url>"
+        )
+    lines.append("</urlset>")
+    return HttpResponse("\n".join(lines), content_type="application/xml")
+
+
+def sitemap_packages(request, page):
+    """Package detail pages sitemap, chunked by SITEMAP_CHUNK."""
+    base = f"{request.scheme}://{request.get_host()}"
+    offset = (page - 1) * SITEMAP_CHUNK
+    pkgs = (
+        Package.objects.order_by("id")
+        .values_list("id", "updated_at")[offset : offset + SITEMAP_CHUNK]
+    )
+    lines = ['<?xml version="1.0" encoding="UTF-8"?>']
+    lines.append('<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">')
+    for pk, updated_at in pkgs:
+        loc = f"{base}/package/{pk}/"
+        lastmod = ""
+        if updated_at:
+            lastmod = f"<lastmod>{updated_at.strftime('%Y-%m-%d')}</lastmod>"
+        lines.append(
+            f"  <url><loc>{loc}</loc>{lastmod}"
+            f"<changefreq>weekly</changefreq><priority>0.6</priority></url>"
+        )
+    lines.append("</urlset>")
+    return HttpResponse("\n".join(lines), content_type="application/xml")

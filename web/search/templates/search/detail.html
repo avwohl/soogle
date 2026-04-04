@@ -1,5 +1,29 @@
 {% extends "search/base.html" %}
 {% block title %}{{ pkg.name }}{% endblock %}
+{% block meta_description %}{{ pkg.name }} — {% if pkg.description %}{{ pkg.description|truncatewords:30 }}{% else %}Smalltalk package from {{ pkg.site.display_name }}{% endif %}{% if pkg.dialect and pkg.dialect != "unknown" %} ({{ pkg.dialect }}){% endif %}{% endblock %}
+{% block canonical %}{{ site_url }}/package/{{ pkg.pk }}/{% endblock %}
+{% block og_type %}article{% endblock %}
+{% block og_title %}{{ pkg.name }} - Smalltalk Package{% endblock %}
+{% block og_description %}{% if pkg.description %}{{ pkg.description|truncatewords:30 }}{% else %}Smalltalk package from {{ pkg.site.display_name }}{% endif %}{% endblock %}
+{% block og_url %}{{ site_url }}/package/{{ pkg.pk }}/{% endblock %}
+{% block head_extra %}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "SoftwareSourceCode",
+  "name": "{{ pkg.name|escapejs }}",
+  "description": "{{ pkg.description|truncatewords:50|escapejs }}",
+  {% if pkg.url %}"codeRepository": "{{ pkg.url|escapejs }}",{% endif %}
+  "programmingLanguage": {
+    "@type": "ComputerLanguage",
+    "name": "Smalltalk"{% if pkg.dialect and pkg.dialect != "unknown" %},
+    "alternateName": "{{ pkg.dialect|escapejs }}"{% endif %}
+  },
+  {% if pkg.license %}"license": "{{ pkg.license|escapejs }}",{% endif %}
+  "url": "{{ site_url }}/package/{{ pkg.pk }}/"
+}
+</script>
+{% endblock %}
 
 {% block body %}
 <div class="container wide">

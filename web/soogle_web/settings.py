@@ -35,6 +35,7 @@ TEMPLATES = [
         "OPTIONS": {
             "context_processors": [
                 "django.template.context_processors.request",
+                "search.context_processors.site_url",
             ],
         },
     },

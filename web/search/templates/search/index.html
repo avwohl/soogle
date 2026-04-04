@@ -1,5 +1,24 @@
 {% extends "search/base.html" %}
 {% block title %}Soogle{% endblock %}
+{% block meta_description %}Soogle indexes {{ stats.packages }} Smalltalk packages and {{ stats.videos }} videos across Pharo, Squeak, Cuis, and more. Search classes, methods, and source code.{% endblock %}
+{% block canonical %}{{ site_url }}/{% endblock %}
+{% block og_url %}{{ site_url }}/{% endblock %}
+{% block head_extra %}
+<script type="application/ld+json">
+{
+  "@context": "https://schema.org",
+  "@type": "WebSite",
+  "name": "Soogle",
+  "url": "{{ site_url }}/",
+  "description": "Search engine for Smalltalk source code",
+  "potentialAction": {
+    "@type": "SearchAction",
+    "target": "{{ site_url }}/search/?q={search_term_string}",
+    "query-input": "required name=search_term_string"
+  }
+}
+</script>
+{% endblock %}
 
 {% block body %}
 <div class="container">

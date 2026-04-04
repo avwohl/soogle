@@ -1,5 +1,10 @@
 {% extends "search/base.html" %}
 {% block title %}{% if q %}{{ q }} - {% endif %}Search{% endblock %}
+{% block meta_description %}{% if q %}Search results for "{{ q }}" — {{ paginator.count }} Smalltalk package{{ paginator.count|pluralize }} found on Soogle.{% else %}Browse {{ paginator.count }} Smalltalk packages across Pharo, Squeak, Cuis, and more on Soogle.{% endif %}{% endblock %}
+{% block canonical %}{{ site_url }}/search/{% if q %}?q={{ q }}{% endif %}{% endblock %}
+{% block og_title %}{% if q %}{{ q }} - Smalltalk Package Search{% else %}Browse Smalltalk Packages{% endif %}{% endblock %}
+{% block og_description %}{% if q %}Search results for "{{ q }}" on Soogle — {{ paginator.count }} Smalltalk package{{ paginator.count|pluralize }} found.{% else %}Browse {{ paginator.count }} Smalltalk packages on Soogle.{% endif %}{% endblock %}
+{% block og_url %}{{ site_url }}/search/{% if q %}?q={{ q }}{% endif %}{% endblock %}
 
 {% block body %}
 <div class="container wide">
@@ -50,14 +55,14 @@
     </select>
   </form>
 
-  <div class="result-info">
+  <h1 class="result-info">
     {% if q %}
     About {{ paginator.count }} result{{ paginator.count|pluralize }} for <b>{{ q }}</b>
     {% else %}
     {{ paginator.count }} package{{ paginator.count|pluralize }}
     {% endif %}
     {% if page.number > 1 %} &mdash; page {{ page.number }}{% endif %}
-  </div>
+  </h1>
 
   {% for pkg in page %}
   <div class="result">

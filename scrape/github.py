@@ -8,11 +8,18 @@ Usage:
     python -m scrape github [--incremental]
 """
 
+import re
 import time
 import logging
 import requests
 from datetime import datetime, timedelta
 from . import config, db
+
+_ST_SIGNAL = re.compile(
+    r"\b(smalltalk|pharo|squeak|cuis|gemstone|visualworks|seaside|gnu.smalltalk"
+    r"|roassal|glamorous|moose|metacello|monticello)\b",
+    re.IGNORECASE,
+)
 
 log = logging.getLogger(__name__)
 
@@ -72,6 +79,24 @@ class GitHubScraper:
         """Full repo details via /repos/:owner/:repo."""
         time.sleep(config.GITHUB_API_PAUSE)
         return self._get(f"{config.GITHUB_API}/repos/{full_name}")
+
+    def _is_actually_smalltalk(self, full_name):
+        """Check the languages breakdown to see if the repo really has Smalltalk.
+
+        GitHub's linguist sometimes tags C# (.cs) repos as Smalltalk because
+        .cs is also the Smalltalk changeset extension. This fetches the
+        /languages endpoint and returns False if Smalltalk is absent or
+        dwarfed by C#/other languages.
+        """
+        time.sleep(config.GITHUB_API_PAUSE)
+        langs = self._get(f"{config.GITHUB_API}/repos/{full_name}/languages")
+        if langs is None:
+            return True  # can't tell, assume OK
+        st_bytes = langs.get("Smalltalk", 0)
+        if st_bytes > 0:
+            return True
+        # No Smalltalk bytes at all — GitHub tagged it wrong
+        return False
 
     # ----- date segmentation -----
 
@@ -165,6 +190,16 @@ class GitHubScraper:
                         if detail is None:
                             errors += 1
                             continue
+
+                        # For low-signal repos, verify via /languages endpoint
+                        # that the repo actually contains Smalltalk code (not just C#)
+                        stars = detail.get("stargazers_count", 0)
+                        desc = detail.get("description") or ""
+                        name = detail.get("name") or ""
+                        if stars <= 1 and not _ST_SIGNAL.search(f"{name} {desc}"):
+                            if not self._is_actually_smalltalk(full_name):
+                                log.debug("Skipped %s (no Smalltalk in languages)", full_name)
+                                continue
 
                         row_id = db.insert_scrape_raw(
                             self.conn, job_id, self.site_id, full_name, detail,

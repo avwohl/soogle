@@ -24,7 +24,7 @@ $PYTHON github --incremental || log "WARN: github failed"
 log "Web sources (squeaksource, smalltalkhub, rosettacode, vskb)"
 $PYTHON web all || log "WARN: web all failed"
 
-log "Custom scrapers (squeakmap, sourceforge, launchpad, lukas_renggli, debianarchive, ftpsqueak, squeakwiki)"
+log "Custom scrapers (squeakmap, sourceforge, launchpad, lukas_renggli)"
 $PYTHON custom all || log "WARN: custom all failed"
 
 # --- Processing phases ---

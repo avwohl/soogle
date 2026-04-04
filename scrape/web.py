@@ -566,9 +566,24 @@ _KNOWN_DOMAINS = {
     "ss3.gemstone.com",
     "stackoverflow.com", "www.stackoverflow.com",
     "reddit.com", "www.reddit.com",
-    "en.wikipedia.org",
+    "en.wikipedia.org", "ja.wikipedia.org",
     "youtube.com", "www.youtube.com",
     "amazon.com", "www.amazon.com",
+    # File archives and wikis — not package sources
+    "ftp.squeak.org",
+    "wiki.squeak.org",
+    "handwiki.org",
+    "en.scratch-wiki.info",
+    "www.wikihow.com",
+    # Spam/irrelevant sites that mention "smalltalk" incidentally
+    "www.websiteplanet.com",
+    "www.libhunt.com",
+    "awesomeopensource.com",
+    "news.ycombinator.com",
+    "www.e-booksdirectory.com",
+    "finance.yahoo.com",
+    "store.steampowered.com",
+    "www.google-dorking.com",
 }
 
 # Exclude these from search queries so they don't waste result slots
@@ -861,26 +876,59 @@ class DiscoveryScraper(BaseScraper):
         found = saved = errors = 0
         seen_urls = set()
 
-        def _process_url(url):
-            """Visit a URL, save if it has Smalltalk content, return child links."""
-            nonlocal found, saved, errors
+        def _extract_url(url):
+            """Visit a URL, return (meta, children) or (None, [])."""
+            url = url.split("#")[0]  # strip fragment
             if url in seen_urls or self._is_known_domain(url):
-                return []
+                return None, []
             seen_urls.add(url)
-            found += 1
             try:
-                meta, children = self._extract_from_page(url)
-                if meta is not None:
+                return self._extract_from_page(url)
+            except Exception as e:
+                log.error("Discovery page %s failed: %s", url, e)
+                return None, []
+
+        def _process_top_url(url):
+            """Process a search-result URL: extract it and its children as one entry."""
+            nonlocal found, saved, errors
+            url = url.split("#")[0]
+            if url in seen_urls or self._is_known_domain(url):
+                return
+            found += 1
+            meta, children = _extract_url(url)
+
+            # Follow internal links one level deep; merge their content
+            # into the parent rather than saving separate entries
+            child_pages = 0
+            for child in children[:5]:
+                child = child.split("#")[0]
+                if child in seen_urls or self._is_known_domain(child):
+                    continue
+                child_meta, _ = _extract_url(child)
+                if child_meta is not None:
+                    child_pages += 1
+                    if meta is None:
+                        meta = child_meta
+                        meta["url"] = url  # credit the parent URL
+                    else:
+                        # Merge child code/links into parent
+                        meta["code_blocks"] = (meta.get("code_blocks") or []) + (child_meta.get("code_blocks") or [])
+                        meta["file_links"] = (meta.get("file_links") or []) + (child_meta.get("file_links") or [])
+
+            if meta is not None:
+                meta["code_block_count"] = len(meta.get("code_blocks") or [])
+                meta["file_link_count"] = len(meta.get("file_links") or [])
+                if child_pages:
+                    meta["child_pages"] = child_pages
+                try:
                     row_id = db.insert_scrape_raw(
                         self.conn, job_id, self.site_id, url, meta,
                     )
                     if row_id:
                         saved += 1
-                return children
-            except Exception as e:
-                log.error("Discovery page %s failed: %s", url, e)
-                errors += 1
-                return []
+                except Exception as e:
+                    log.error("Discovery save %s failed: %s", url, e)
+                    errors += 1
 
         try:
             queries = _DISCOVERY_QUERIES
@@ -901,11 +949,7 @@ class DiscoveryScraper(BaseScraper):
                          total, known, new)
 
                 for ui, url in enumerate(urls, 1):
-                    children = _process_url(url)
-
-                    # Follow internal links one level deep, capped per page
-                    for child in children[:5]:
-                        _process_url(child)
+                    _process_top_url(url)
 
                     if ui % 10 == 0:
                         log.info("  progress: %d/%d URLs, saved=%d",
