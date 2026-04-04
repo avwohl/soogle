@@ -57,6 +57,46 @@ _DIALECT_PATTERNS = [
 ]
 
 
+# Channels known to be all-Smalltalk content (always accept)
+_TRUSTED_CHANNELS = {
+    "esugboard", "Cincom Smalltalk", "jarober", "Smalltalk Renaissance",
+    "FAST - Fundación Argentina de Smalltalk", "James Foster",
+    "UK Smalltalk User Group", "Smalltalk Renaissance — 50 Years of Smalltalk",
+    "Ken Dickey", "Cuisme", "gandysmedicineshow", "Docendo Disco ",
+    "HuwsTube", "Lawson English", "Eiichiro Ito", "bwbadger", "redbear8174",
+    "Inria Learning Lab", "TkTorah", "Kirill Nick Melnikov",
+}
+
+# Keywords that confirm a video is about Smalltalk-the-language
+_ST_KEYWORDS = re.compile(
+    r"\bsmalltalk\b|\bpharo\b|\bsqueak\b|\bcuis\b|\bgemstone\b"
+    r"|\bvisualworks\b|\bseaside\b|\bgnu.?smalltalk\b|\bva.?smalltalk\b"
+    r"|\bdolphin.?smalltalk\b|\bsmalltalk[-/]?80\b",
+    re.IGNORECASE,
+)
+
+
+# Title patterns that indicate chitchat / conversation skills, not programming
+_CHITCHAT_TITLE = re.compile(
+    r"\bsmall\s+talk\b(?!.*(?:programming|language|code|pharo|squeak))",
+    re.IGNORECASE,
+)
+
+
+def _is_relevant(title, description, channel_name, source):
+    """Return True if the video is about Smalltalk the programming language."""
+    if source == "mooc_pharo":
+        return True
+    if channel_name in _TRUSTED_CHANNELS:
+        return True
+    # Reject "small talk" (conversation) videos even if description has
+    # #smalltalk hashtag — the title is a stronger signal
+    if _CHITCHAT_TITLE.search(title):
+        return False
+    text = f"{title} {description}"
+    return bool(_ST_KEYWORDS.search(text))
+
+
 def _detect_dialect(title, description=""):
     """Guess the Smalltalk dialect from video title/description."""
     text = f"{title} {description}"
@@ -240,6 +280,10 @@ class YouTubeScraper:
         else:
             channel_name = str(channel) if channel else ""
             channel_url = ""
+
+        # Skip videos not about Smalltalk the programming language
+        if not _is_relevant(title, description, channel_name, source):
+            return False
         thumbnail = r.get("thumbnail", {})
         if isinstance(thumbnail, dict):
             thumbnail_url = thumbnail.get("static", "") or thumbnail.get("rich", "")

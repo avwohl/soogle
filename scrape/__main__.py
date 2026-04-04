@@ -5,6 +5,7 @@ Usage:
     python -m scrape web <source>          # squeaksource | smalltalkhub | rosettacode | vskb | all
     python -m scrape discover <engine>     # brave | serpapi | bing | ddg
     python -m scrape youtube [--playlists-only]
+    python -m scrape custom <source>       # squeakmap | debianarchive | lukas_renggli | sourceforge | squeakwiki | ftpsqueak | launchpad | all
     python -m scrape analyze [--limit N] [--min-urls 2] [--show] [--min-score 50]
     python -m scrape process [--limit N]
     python -m scrape status
@@ -75,6 +76,17 @@ def cmd_analyze(args):
             if result["promising"]:
                 print("\nPromising domains (run with --show to see details):")
                 show_results(conn, min_score=50)
+
+
+def cmd_custom(args):
+    from .custom import run_custom_scraper
+    with db.connection() as conn:
+        result = run_custom_scraper(conn, args.source)
+    if isinstance(result, dict) and "found" in result:
+        print(f"{args.source}: found={result['found']} saved={result['saved']} errors={result['errors']}")
+    else:
+        for name, r in result.items():
+            print(f"{name}: found={r['found']} saved={r['saved']} errors={r['errors']}")
 
 
 def cmd_process(args):
@@ -166,6 +178,13 @@ def main():
     yt.add_argument("--playlists-only", action="store_true",
                     help="Only scrape known playlists (Pharo MOOC etc.)")
 
+    cust = sub.add_parser("custom", help="Run custom scrapers for analyzed sites")
+    cust.add_argument("source",
+                      choices=["squeakmap", "debianarchive", "lukas_renggli",
+                               "sourceforge", "squeakwiki", "ftpsqueak",
+                               "launchpad", "all"],
+                      help="Custom scraper to run")
+
     ana = sub.add_parser("analyze", help="LLM analysis of discovered domains")
     ana.add_argument("--limit", type=int, default=None, help="Max domains to analyze")
     ana.add_argument("--min-urls", type=int, default=2, help="Min discovery hits per domain (default 2)")
@@ -187,6 +206,7 @@ def main():
         "web": cmd_web,
         "discover": cmd_discover,
         "youtube": cmd_youtube,
+        "custom": cmd_custom,
         "analyze": cmd_analyze,
         "process": cmd_process,
         "status": cmd_status,
