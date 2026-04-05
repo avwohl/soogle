@@ -229,6 +229,8 @@ class YouTubeScraper:
                     duration_seconds=None, published_at=None,
                     view_count=0, dialect="unknown", source="youtube"):
         """Insert or update a video row. Returns True if new."""
+        if db.is_blocked(self.conn, "youtube", video_id):
+            return False
         with self.conn.cursor() as cur:
             try:
                 cur.execute(

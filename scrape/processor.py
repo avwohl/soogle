@@ -19,12 +19,25 @@ log = logging.getLogger(__name__)
 # Patterns in name/description that indicate a repo is NOT Smalltalk
 _NOT_SMALLTALK = re.compile(
     r"(?:"
+    # .NET / C# / Unity ecosystem
     r"\.Net\b|C#|CSharp\b|ASP\.NET|dotnet\b|Xamarin|WPF\b|WinForms|Blazor|MAUI\b"
-    r"|\bUnity\s*(game|project|3D|2D)|\bUnreal\s*Engine"
+    r"|\bUnity\b|\bUnreal\s*Engine"
+    r"|\bPlayMaker\b|\bTextMesh\s*Pro\b|\bVRTK\b"
+    r"|\bIdentityServer\b|\bNuGet\b|\bMSSQL\b|\bPowerShell\b"
+    # IEC 61131-3 / PLC / Structured Text (uses .st extension like Smalltalk)
+    r"|\bIEC.?61131\b|\bStructured.Text\b|\bPLC\b|\bCodesys\b|\bCODESYS\b"
+    r"|\bTwinCa[Tt]\b|\bSIMATIC\b|\bLadder.Logic\b|\bOPC.?UA\b"
+    r"|\bFunction.Block\b"
+    # ML / NLP research (uses .st StringTemplate files)
+    r"|\bPyTorch\b|\bTensorFlow\b|\bneural.architecture\b"
+    r"|\bsegmentation.model\b|\bNLP\b|\bseq2seq\b"
+    # Coding challenge sites
+    r"|\bLeetCode\b|\bHackerRank\b|\bCodewars\b"
+    # Other frameworks / ecosystems
     r"|\bSpring\s*Boot|\bLaravel|\bRuby\s*on\s*Rails"
     r"|\bReact\s*(app|project|Native)|\bAngular\s*(app|project)|\bVue\.js"
     r"|\bFlutter\b|\bSwiftUI\b|\bKotlin\b|\bNode\.js"
-    r"|\bTensorFlow\b|\bPyTorch\b|\bSolidity\b|\bEthereum\b|\bblockchain\b"
+    r"|\bSolidity\b|\bEthereum\b|\bblockchain\b"
     r"|\bWordPress\b|\bArduino\b|\bRaspberry\s*Pi"
     r"|\bAndroid\s*(app|studio)|\biOS\s*(app|swift)"
     r"|\bdiscord\.net|\bdiscord\s*bot\b.*C#"
@@ -32,7 +45,9 @@ _NOT_SMALLTALK = re.compile(
     re.IGNORECASE,
 )
 _HAS_SMALLTALK = re.compile(
-    r"\b(smalltalk|pharo|squeak|cuis|gemstone|visualworks|seaside|gnu.smalltalk)\b",
+    r"\b(smalltalk|pharo|squeak|cuis|gemstone|visualworks|seaside|gnu.smalltalk"
+    r"|newspeak|redline|roassal|glamorous|moose|metacello|monticello|iceberg"
+    r"|morphic|sunit)\b",
     re.IGNORECASE,
 )
 
@@ -244,6 +259,17 @@ def process_one(conn, raw_row):
 
     # Determine parser based on site
     site_name = db.get_site_name(conn, site_id)
+
+    # Blocklist check
+    if db.is_blocked(conn, site_name, external_id):
+        with conn.cursor() as cur:
+            cur.execute(
+                "UPDATE scrape_raw SET status='processed', processed_at=NOW() WHERE id=%s",
+                (raw_id,),
+            )
+        conn.commit()
+        return
+
     if site_name == "github":
         pkg = _parse_github(meta)
     else:
@@ -261,12 +287,12 @@ def process_one(conn, raw_row):
             )
         conn.commit()
 
-    if site_name == "github" and dialect == "unknown":
-        if not pkg["description"] and not meta.get("stars"):
+    if site_name == "github":
+        text = f'{pkg["name"]} {pkg["description"]}'
+        if dialect == "unknown" and not pkg["description"] and not meta.get("stars"):
             _skip_junk("no description, no stars, no dialect")
             return
-        text = f'{pkg["name"]} {pkg["description"]}'
-        if meta.get("stars", 0) <= 1 and _NOT_SMALLTALK.search(text) and not _HAS_SMALLTALK.search(text):
+        if _NOT_SMALLTALK.search(text) and not _HAS_SMALLTALK.search(text):
             _skip_junk("non-Smalltalk framework detected")
             return
 

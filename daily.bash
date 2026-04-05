@@ -39,6 +39,14 @@ else
     log "SKIP: ANTHROPIC_API_KEY not set, skipping analyze"
 fi
 
+log "LLM review of new packages (requires ANTHROPIC_API_KEY)"
+if [ -n "${ANTHROPIC_API_KEY:-}" ]; then
+    $PYTHON llm-review || log "WARN: llm-review failed"
+    $PYTHON video-review || log "WARN: video-review failed"
+else
+    log "SKIP: ANTHROPIC_API_KEY not set, skipping llm-review / video-review"
+fi
+
 log "Status"
 $PYTHON status
 

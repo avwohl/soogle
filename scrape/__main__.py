@@ -8,6 +8,9 @@ Usage:
     python -m scrape custom <source>       # squeakmap | lukas_renggli | sourceforge | launchpad | all
     python -m scrape analyze [--limit N] [--min-urls 2] [--show] [--min-score 50]
     python -m scrape process [--limit N]
+    python -m scrape block <external_id> [--site github] [--reason '...']
+    python -m scrape llm-review [--limit N] [--fetch-only] [--review-only] [--model M] [--scope S]
+    python -m scrape video-review [--limit N] [--model MODEL] [--scope S]
     python -m scrape status
 """
 
@@ -97,6 +100,60 @@ def cmd_process(args):
         else:
             result = process_all(conn)
     print(f"Process: processed={result['processed']} errors={result['errors']}")
+
+
+def cmd_llm_review(args):
+    from .llm_review import fetch_readmes, review_packages
+    with db.connection() as conn:
+        if not args.review_only:
+            fetched = fetch_readmes(conn, limit=args.limit)
+            print(f"README fetch: {fetched} fetched")
+        if not args.fetch_only:
+            result = review_packages(conn, limit=args.limit, model=args.model,
+                                     scope=args.scope)
+            print(f"LLM review: reviewed={result['reviewed']} kept={result['kept']} "
+                  f"blocked={result['blocked']} errors={result['errors']}")
+
+
+def cmd_video_review(args):
+    from .llm_review import review_videos
+    with db.connection() as conn:
+        result = review_videos(conn, limit=args.limit, model=args.model,
+                               scope=args.scope)
+    print(f"Video review: reviewed={result['reviewed']} kept={result['kept']} "
+          f"blocked={result['blocked']} errors={result['errors']}")
+
+
+def cmd_block(args):
+    with db.connection() as conn:
+        with conn.cursor() as cur:
+            cur.execute(
+                "INSERT IGNORE INTO blocklist (external_id, site_name, reason) "
+                "VALUES (%s, %s, %s)",
+                (args.external_id, args.site, args.reason),
+            )
+            if cur.rowcount:
+                conn.commit()
+                print(f"Blocked: {args.site}/{args.external_id}")
+            else:
+                print(f"Already blocked: {args.site}/{args.external_id}")
+
+            # Also delete the package if it exists
+            cur.execute(
+                "SELECT p.id FROM packages p JOIN sites s ON p.site_id = s.id "
+                "WHERE s.name = %s AND p.external_id = %s",
+                (args.site, args.external_id),
+            )
+            row = cur.fetchone()
+            if row:
+                pkg_id = row["id"]
+                cur.execute("UPDATE scrape_raw SET package_id=NULL WHERE package_id=%s", (pkg_id,))
+                cur.execute("DELETE FROM package_methods WHERE package_id=%s", (pkg_id,))
+                cur.execute("DELETE FROM package_classes WHERE package_id=%s", (pkg_id,))
+                cur.execute("DELETE FROM package_categories WHERE package_id=%s", (pkg_id,))
+                cur.execute("DELETE FROM packages WHERE id=%s", (pkg_id,))
+                conn.commit()
+                print(f"Deleted package id={pkg_id}")
 
 
 def cmd_status(args):
@@ -193,6 +250,29 @@ def main():
     proc = sub.add_parser("process", help="Process scrape_raw into packages")
     proc.add_argument("--limit", type=int, default=None, help="Max rows to process")
 
+    llm = sub.add_parser("llm-review", help="LLM quality review of packages")
+    llm.add_argument("--limit", type=int, default=None, help="Max packages to review")
+    llm.add_argument("--fetch-only", action="store_true", help="Only fetch READMEs, skip LLM")
+    llm.add_argument("--review-only", action="store_true", help="Skip README fetch, LLM only")
+    llm.add_argument("--model", default="claude-haiku-4-5-20251001",
+                     help="Anthropic model to use (default: claude-haiku-4-5-20251001)")
+    llm.add_argument("--scope", choices=["unreviewed", "upgrade", "all"],
+                     default="unreviewed",
+                     help="unreviewed=new only, upgrade=re-review items from a lower model, all=everything")
+
+    vr = sub.add_parser("video-review", help="LLM quality review of videos")
+    vr.add_argument("--limit", type=int, default=None, help="Max videos to review")
+    vr.add_argument("--model", default="claude-haiku-4-5-20251001",
+                    help="Anthropic model to use (default: claude-haiku-4-5-20251001)")
+    vr.add_argument("--scope", choices=["unreviewed", "upgrade", "all"],
+                    default="unreviewed",
+                    help="unreviewed=new only, upgrade=re-review items from a lower model, all=everything")
+
+    blk = sub.add_parser("block", help="Add a repo to the blocklist and delete it")
+    blk.add_argument("external_id", help="e.g. owner/repo for GitHub")
+    blk.add_argument("--site", default="github", help="Site name (default: github)")
+    blk.add_argument("--reason", default="", help="Why it's blocked")
+
     sub.add_parser("status", help="Show scrape pipeline status")
 
     args = parser.parse_args()
@@ -208,6 +288,9 @@ def main():
         "custom": cmd_custom,
         "analyze": cmd_analyze,
         "process": cmd_process,
+        "llm-review": cmd_llm_review,
+        "video-review": cmd_video_review,
+        "block": cmd_block,
         "status": cmd_status,
     }
     handlers[args.command](args)

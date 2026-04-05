@@ -17,7 +17,31 @@ from . import config, db
 
 _ST_SIGNAL = re.compile(
     r"\b(smalltalk|pharo|squeak|cuis|gemstone|visualworks|seaside|gnu.smalltalk"
-    r"|roassal|glamorous|moose|metacello|monticello)\b",
+    r"|newspeak|redline|roassal|glamorous|moose|metacello|monticello|iceberg"
+    r"|morphic|sunit)\b",
+    re.IGNORECASE,
+)
+
+_NOT_SMALLTALK = re.compile(
+    r"(?:"
+    r"\.Net\b|C#|CSharp\b|ASP\.NET|dotnet\b|Xamarin|WPF\b|WinForms|Blazor|MAUI\b"
+    r"|\bUnity\b|\bUnreal\s*Engine"
+    r"|\bPlayMaker\b|\bTextMesh\s*Pro\b|\bVRTK\b"
+    r"|\bIdentityServer\b|\bNuGet\b|\bMSSQL\b|\bPowerShell\b"
+    r"|\bIEC.?61131\b|\bStructured.Text\b|\bPLC\b|\bCodesys\b|\bCODESYS\b"
+    r"|\bTwinCa[Tt]\b|\bSIMATIC\b|\bLadder.Logic\b|\bOPC.?UA\b"
+    r"|\bFunction.Block\b"
+    r"|\bPyTorch\b|\bTensorFlow\b|\bneural.architecture\b"
+    r"|\bsegmentation.model\b|\bNLP\b|\bseq2seq\b"
+    r"|\bLeetCode\b|\bHackerRank\b|\bCodewars\b"
+    r"|\bSpring\s*Boot|\bLaravel|\bRuby\s*on\s*Rails"
+    r"|\bReact\s*(app|project|Native)|\bAngular\s*(app|project)|\bVue\.js"
+    r"|\bFlutter\b|\bSwiftUI\b|\bKotlin\b|\bNode\.js"
+    r"|\bSolidity\b|\bEthereum\b|\bblockchain\b"
+    r"|\bWordPress\b|\bArduino\b|\bRaspberry\s*Pi"
+    r"|\bAndroid\s*(app|studio)|\biOS\s*(app|swift)"
+    r"|\bdiscord\.net|\bdiscord\s*bot\b.*C#"
+    r")",
     re.IGNORECASE,
 )
 
@@ -93,9 +117,9 @@ class GitHubScraper:
         if langs is None:
             return True  # can't tell, assume OK
         st_bytes = langs.get("Smalltalk", 0)
-        if st_bytes > 0:
+        if st_bytes >= 1000:
             return True
-        # No Smalltalk bytes at all — GitHub tagged it wrong
+        # Too few Smalltalk bytes — likely a misidentified .cs file
         return False
 
     # ----- date segmentation -----
@@ -191,12 +215,23 @@ class GitHubScraper:
                             errors += 1
                             continue
 
-                        # For low-signal repos, verify via /languages endpoint
-                        # that the repo actually contains Smalltalk code (not just C#)
                         stars = detail.get("stargazers_count", 0)
                         desc = detail.get("description") or ""
                         name = detail.get("name") or ""
-                        if stars <= 1 and not _ST_SIGNAL.search(f"{name} {desc}"):
+                        text = f"{name} {desc}"
+
+                        # Blocklist check
+                        if db.is_blocked(self.conn, "github", full_name):
+                            log.debug("Skipped %s (blocklisted)", full_name)
+                            continue
+
+                        # Reject repos whose name/description match non-Smalltalk tech
+                        if _NOT_SMALLTALK.search(text) and not _ST_SIGNAL.search(text):
+                            log.debug("Skipped %s (non-Smalltalk: %s)", full_name, desc[:60])
+                            continue
+
+                        # For low-signal repos, verify via /languages endpoint
+                        if stars <= 1 and not _ST_SIGNAL.search(text):
                             if not self._is_actually_smalltalk(full_name):
                                 log.debug("Skipped %s (no Smalltalk in languages)", full_name)
                                 continue

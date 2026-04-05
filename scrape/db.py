@@ -6,6 +6,26 @@ import pymysql
 from contextlib import contextmanager
 from . import config
 
+_BLOCKLIST = None
+
+
+def load_blocklist(conn):
+    """Load the set of blocked (site_name, external_id) pairs from the blocklist table."""
+    global _BLOCKLIST
+    if _BLOCKLIST is not None:
+        return _BLOCKLIST
+    _BLOCKLIST = set()
+    with conn.cursor() as cur:
+        cur.execute("SELECT site_name, external_id FROM blocklist")
+        for row in cur.fetchall():
+            _BLOCKLIST.add((row["site_name"], row["external_id"]))
+    return _BLOCKLIST
+
+
+def is_blocked(conn, site_name, external_id):
+    """Check if an external_id is on the blocklist."""
+    return (site_name, external_id) in load_blocklist(conn)
+
 
 def connect():
     return pymysql.connect(

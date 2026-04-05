@@ -278,6 +278,7 @@ CREATE TABLE videos (
                         'visualworks','dolphin','va_smalltalk','st80','general','unknown'
                     ) NOT NULL DEFAULT 'unknown',
     source          VARCHAR(100) NOT NULL DEFAULT 'youtube',  -- 'youtube', 'mooc_pharo', etc.
+    llm_review      VARCHAR(100) NULL,                        -- model that reviewed, NULL = unreviewed
     created_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
     updated_at      TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
 
