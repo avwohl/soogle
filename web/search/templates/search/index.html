@@ -1,6 +1,6 @@
 {% extends "search/base.html" %}
 {% block title %}Soogle{% endblock %}
-{% block meta_description %}Soogle indexes {{ stats.packages }} Smalltalk packages and {{ stats.videos }} videos across Pharo, Squeak, Cuis, and more. Search classes, methods, and source code.{% endblock %}
+{% block meta_description %}Soogle indexes {{ stats.packages }} Smalltalk packages and {{ stats.videos }} videos across Pharo, Squeak, Cuis, and more. Search Smalltalk source code and videos.{% endblock %}
 {% block canonical %}{{ site_url }}/{% endblock %}
 {% block og_url %}{{ site_url }}/{% endblock %}
 {% block head_extra %}
@@ -27,7 +27,7 @@
     <p class="tagline">Search engine for Smalltalk source code</p>
     <form action="{% url 'search' %}" method="get">
       <div class="search-box">
-        <input type="text" name="q" placeholder="Search packages, classes, methods..." autofocus>
+        <input type="text" name="q" placeholder="Search packages..." autofocus>
         <button type="submit">Search</button>
       </div>
     </form>

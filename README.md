@@ -2,11 +2,11 @@
 
 Search engine for Smalltalk source code and videos.
 
-Soogle indexes packages, classes, and methods from Smalltalk repositories across multiple dialects (Pharo, Squeak, Cuis, GemStone, VisualWorks, GNU Smalltalk, Dolphin, and more). It also indexes Smalltalk videos — conference talks, tutorials, and screencasts. Everything is searchable through a clean web interface at [soogle.org](https://soogle.org).
+Soogle indexes Smalltalk packages from repositories across multiple dialects (Pharo, Squeak, Cuis, GemStone, VisualWorks, GNU Smalltalk, Dolphin, and more). It also indexes Smalltalk videos — conference talks, tutorials, and screencasts. Everything is searchable through a clean web interface at [soogle.org](https://soogle.org).
 
 ## Features
 
-- Full-text search across Smalltalk packages, classes, and methods
+- Full-text search across Smalltalk packages
 - Filter by dialect, source site, or category
 - Browse indexed sources and recently added packages
 - Video index with search, dialect filtering, and sort by views/date
@@ -52,7 +52,7 @@ Each scraper fetches metadata from its source and writes rows into the `scrape_r
 - Detects the Smalltalk **dialect** from GitHub topics and name/description keywords (pharo, squeak, cuis, etc.) with a confidence score
 - **Auto-categorizes** into one or more of 19 categories (web, database, testing, ui/graphics, etc.) via keyword matching
 - Applies **quality gates** — skips repos with no description, no stars, and unknown dialect; rejects names matching known non-Smalltalk patterns (Arduino, TensorFlow, Unity, etc.)
-- Does an **atomic upsert** — inserts/updates the package plus its classes, methods, and categories in a single transaction so data is always consistent
+- Does an **atomic upsert** — inserts/updates the package and its categories in a single transaction so data is always consistent
 
 ### 3. LLM review — filter false positives
 
@@ -75,7 +75,7 @@ The Django app reads directly from the MySQL database:
 
 - **Home page** — package count, video count, dialect breakdown, recently added packages
 - **Search** — full-text search with filters for dialect, source site, and category; sort by relevance, stars, update date, or name
-- **Package detail** — description, README excerpt, classes, methods, metadata (license, stars, forks, topics, dates)
+- **Package detail** — description, README excerpt, metadata (license, stars, forks, topics, dates), categories
 - **Videos** — searchable gallery with dialect filter, sort by views or date
 - **Sources** — lists all indexed sites with package counts
 - **Submit** — users can submit new Smalltalk URLs for indexing
