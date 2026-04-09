@@ -110,7 +110,9 @@ def cmd_llm_review(args):
             print(f"README fetch: {fetched} fetched")
         if not args.fetch_only:
             result = review_packages(conn, limit=args.limit, model=args.model,
-                                     scope=args.scope)
+                                     scope=args.scope,
+                                     since_id=args.since_id,
+                                     since_date=args.since_date)
             print(f"LLM review: reviewed={result['reviewed']} kept={result['kept']} "
                   f"blocked={result['blocked']} errors={result['errors']}")
 
@@ -119,7 +121,9 @@ def cmd_video_review(args):
     from .llm_review import review_videos
     with db.connection() as conn:
         result = review_videos(conn, limit=args.limit, model=args.model,
-                               scope=args.scope)
+                               scope=args.scope,
+                               since_id=args.since_id,
+                               since_date=args.since_date)
     print(f"Video review: reviewed={result['reviewed']} kept={result['kept']} "
           f"blocked={result['blocked']} errors={result['errors']}")
 
@@ -259,6 +263,10 @@ def main():
     llm.add_argument("--scope", choices=["unreviewed", "upgrade", "all"],
                      default="unreviewed",
                      help="unreviewed=new only, upgrade=re-review items from a lower model, all=everything")
+    llm.add_argument("--since-id", type=int, default=None,
+                     help="Only review packages with id >= N")
+    llm.add_argument("--since-date", default=None,
+                     help="Only review packages created at or after this datetime (e.g. 2026-04-05)")
 
     vr = sub.add_parser("video-review", help="LLM quality review of videos")
     vr.add_argument("--limit", type=int, default=None, help="Max videos to review")
@@ -267,6 +275,10 @@ def main():
     vr.add_argument("--scope", choices=["unreviewed", "upgrade", "all"],
                     default="unreviewed",
                     help="unreviewed=new only, upgrade=re-review items from a lower model, all=everything")
+    vr.add_argument("--since-id", type=int, default=None,
+                     help="Only review videos with id >= N")
+    vr.add_argument("--since-date", default=None,
+                     help="Only review videos created at or after this datetime (e.g. 2026-04-05)")
 
     blk = sub.add_parser("block", help="Add a repo to the blocklist and delete it")
     blk.add_argument("external_id", help="e.g. owner/repo for GitHub")

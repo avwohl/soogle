@@ -7,16 +7,22 @@ moved to the blocklist.
 Also reviews videos for relevance — removes "small talk" conversation
 videos, generic OOP content, gemstone jewelry, spam, etc.
 
+The package and video review queues can cross-route: a "package" that is
+actually a YouTube video is moved to the videos table, and a "video"
+that is actually a code package is moved to the packages table.
+
 Usage:
-    python -m scrape llm-review [--limit N] [--fetch-only] [--review-only]
-    python -m scrape video-review [--limit N] [--model MODEL]
+    python -m scrape llm-review [--limit N] [--fetch-only] [--review-only] [--since-id N] [--since-date DATE]
+    python -m scrape video-review [--limit N] [--model MODEL] [--since-id N] [--since-date DATE]
 """
 
+import re
 import time
 import logging
 import base64
 import requests
 import json
+from urllib.parse import urlparse, parse_qs
 from . import config, db
 from .models import model_tier, is_upgrade
 
@@ -24,25 +30,84 @@ log = logging.getLogger(__name__)
 
 BATCH_SIZE = 20  # packages per LLM call
 
+
+# Matches an 11-character YouTube video id in any common URL form.
+_YOUTUBE_ID_RE = re.compile(r"([A-Za-z0-9_-]{11})")
+
+
+def _extract_youtube_id(url):
+    """Return the 11-char YouTube video id from a URL, or None.
+
+    Handles youtube.com/watch?v=, youtu.be/, /embed/, /v/, /shorts/.
+    """
+    if not url:
+        return None
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return None
+    host = (parsed.hostname or "").lower()
+    path = parsed.path or ""
+    if host in ("youtu.be",):
+        candidate = path.lstrip("/").split("/", 1)[0]
+        if _YOUTUBE_ID_RE.fullmatch(candidate):
+            return candidate
+    if "youtube.com" in host or "youtube-nocookie.com" in host:
+        if path.startswith(("/embed/", "/v/", "/shorts/")):
+            candidate = path.split("/", 2)[2].split("/", 1)[0]
+            if _YOUTUBE_ID_RE.fullmatch(candidate):
+                return candidate
+        qs = parse_qs(parsed.query)
+        v = qs.get("v", [""])[0]
+        if _YOUTUBE_ID_RE.fullmatch(v):
+            return v
+    return None
+
 SYSTEM_PROMPT = """\
 You are a classifier for a Smalltalk code search engine called Soogle.
-Your job is to decide whether each package is genuinely related to Smalltalk
-(the programming language family: Pharo, Squeak, Cuis, GemStone, VisualWorks,
-GNU Smalltalk, Dolphin, VA Smalltalk, Newspeak, etc.) or is a false positive
-that was mis-indexed.
+Your job is to decide whether each entry is a genuine Smalltalk *code
+package* (a downloadable code repo, source archive, Monticello/Tonel
+package, .mcz/.st bundle, or similar) for one of the Smalltalk dialects
+(Pharo, Squeak, Cuis, GemStone, VisualWorks, GNU Smalltalk, Dolphin,
+VA Smalltalk, Newspeak, etc.).
 
-Common false positives:
+Block anything that is not itself shippable code, even if it is Smalltalk-
+related.  In particular, BLOCK these (do not keep them just because the
+URL or text mentions Smalltalk):
+- Documentation, tutorials, book chapters, FAQ pages
+- Discussion forums, Google Groups, mailing list archives
+- Web directories, link lists, link farms (e.g. dmoz/odp/cetus)
+- Internet Archive book/magazine/document downloads
+- Blog posts, news articles, museum write-ups, history pieces
+- Video pages, video announcements (LinkedIn / Facebook / Twitter posts
+  about a video), playlists
+- Generic download pages, vendor "developer resources" pages
+- Docker images, vendor product brochures, fix-pack readmes
+- Conference / event pages
 - C# / .NET projects (GitHub linguist confuses .cs changeset files)
 - IEC 61131-3 Structured Text / PLC projects (.st extension overlap)
 - NLP/ML research using StringTemplate .st files
 - Unity game projects
 - Random repos with a tiny .cs or .st file
 
-For each package, respond with a JSON array of objects:
-[{"id": 123, "verdict": "keep"}, {"id": 456, "verdict": "block", "reason": "C# .NET project"}]
+KEEP only entries that are themselves a Smalltalk package, repo, or
+source bundle that someone could load into an image.  When in doubt,
+block — Soogle indexes code, not commentary about code.
 
-Verdicts: "keep" (genuine Smalltalk) or "block" (not Smalltalk).
-Only add "reason" for "block" verdicts. Be concise.
+If the entry's URL is a watchable YouTube video (youtube.com/watch,
+youtu.be/, /shorts/, /embed/), return verdict "video" so we can move it
+to the video review queue.  Do NOT use "video" for blog posts, LinkedIn
+or Facebook announcements, playlists, or pages that merely link to a
+video — those should be blocked.
+
+For each entry, respond with a JSON array of objects:
+[{"id": 123, "verdict": "keep"},
+ {"id": 456, "verdict": "block", "reason": "C# .NET project"},
+ {"id": 789, "verdict": "video", "reason": "YouTube tutorial"}]
+
+Verdicts: "keep" (a real Smalltalk code package), "block" (not a code
+package), or "video" (actually a YouTube watch URL — route to video
+queue).  Only add "reason" for "block" or "video" verdicts.  Be concise.
 """
 
 
@@ -160,6 +225,8 @@ def _call_llm(packages, model):
             "dialect": p["dialect"],
             "topics": p["topics"] or "[]",
         }
+        if p.get("url"):
+            item["url"] = p["url"]
         readme = (p.get("readme_excerpt") or "")[:2000]
         if readme:
             item["readme_start"] = readme
@@ -173,53 +240,55 @@ def _call_llm(packages, model):
         messages=[{"role": "user", "content": user_msg}],
     )
     text = resp.content[0].text.strip()
-    # Extract JSON from response (may be wrapped in markdown code block)
+    # Strip markdown code fences
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+    # Find the JSON array even if surrounded by prose
+    start = text.find("[")
+    end = text.rfind("]")
+    if start >= 0 and end > start:
+        text = text[start:end + 1]
     return json.loads(text)
 
 
 def review_packages(conn, limit=None, model="claude-haiku-4-5-20251001",
-                    scope="unreviewed"):
+                    scope="unreviewed", since_id=None, since_date=None):
     """LLM-review packages.
 
     scope: "unreviewed" — only NULL llm_review
            "upgrade"    — unreviewed + reviewed by a lower-tier model
            "all"        — every package
+    since_id:   only review packages with id >= this value
+    since_date: only review packages with created_at >= this value (str)
     """
     cur = conn.cursor()
-    if scope == "all":
-        sql = """
-            SELECT p.id, p.name, p.qualified_name, p.description, p.stars,
-                   p.dialect, p.topics, p.readme_excerpt, s.name as site_name,
-                   p.llm_review
-            FROM packages p JOIN sites s ON p.site_id = s.id
-            ORDER BY p.stars DESC, p.id
-        """
-    elif scope == "upgrade":
-        sql = """
-            SELECT p.id, p.name, p.qualified_name, p.description, p.stars,
-                   p.dialect, p.topics, p.readme_excerpt, s.name as site_name,
-                   p.llm_review
-            FROM packages p JOIN sites s ON p.site_id = s.id
-            WHERE p.llm_review IS NULL OR p.llm_review != %s
-            ORDER BY p.stars DESC, p.id
-        """
-    else:  # unreviewed
-        sql = """
-            SELECT p.id, p.name, p.qualified_name, p.description, p.stars,
-                   p.dialect, p.topics, p.readme_excerpt, s.name as site_name,
-                   p.llm_review
-            FROM packages p JOIN sites s ON p.site_id = s.id
-            WHERE p.llm_review IS NULL
-            ORDER BY p.stars DESC, p.id
-        """
+    params = []
+    cols = """p.id, p.name, p.qualified_name, p.description, p.stars,
+                   p.dialect, p.topics, p.readme_excerpt, p.url, p.external_id,
+                   s.name as site_name, p.llm_review"""
+    base = f"SELECT {cols}\n            FROM packages p JOIN sites s ON p.site_id = s.id"
+
+    conditions = []
+    if scope == "upgrade":
+        conditions.append("(p.llm_review IS NULL OR p.llm_review != %s)")
+        params.append(model)
+    elif scope != "all":  # unreviewed
+        conditions.append("p.llm_review IS NULL")
+
+    if since_id is not None:
+        conditions.append("p.id >= %s")
+        params.append(since_id)
+    if since_date is not None:
+        conditions.append("p.created_at >= %s")
+        params.append(since_date)
+
+    sql = base
+    if conditions:
+        sql += "\n            WHERE " + " AND ".join(conditions)
+    sql += "\n            ORDER BY p.stars DESC, p.id"
     if limit:
         sql += f" LIMIT {int(limit)}"
-    if scope == "upgrade":
-        cur.execute(sql, (model,))
-    else:
-        cur.execute(sql)
+    cur.execute(sql, params)
     rows = cur.fetchall()
 
     # For upgrade scope, filter to rows actually reviewed by a lower tier
@@ -238,6 +307,7 @@ def review_packages(conn, limit=None, model="claude-haiku-4-5-20251001",
     errors = 0
 
     # Process in batches
+    routed = 0
     for i in range(0, len(rows), BATCH_SIZE):
         batch = rows[i:i + BATCH_SIZE]
         try:
@@ -245,12 +315,51 @@ def review_packages(conn, limit=None, model="claude-haiku-4-5-20251001",
             for item in results:
                 pkg_id = item["id"]
                 verdict = item["verdict"]
+                pkg_row = next((r for r in batch if r["id"] == pkg_id), None)
+                site_name = pkg_row["site_name"] if pkg_row else "github"
+                # Prefer external_id (URL for web_discovered) so blocklist
+                # actually matches what scrapers see; fall back to title.
+                ext_id = (pkg_row["external_id"] if pkg_row and pkg_row.get("external_id")
+                          else (pkg_row["qualified_name"] if pkg_row else str(pkg_id)))
+
+                if verdict == "video":
+                    reason = item.get("reason", "actually a video")
+                    pkg_url = pkg_row["url"] if pkg_row else ""
+                    video_id = _extract_youtube_id(pkg_url)
+                    if video_id and pkg_row:
+                        try:
+                            cur.execute(
+                                "INSERT IGNORE INTO videos "
+                                "(video_id, title, url, description, dialect, source) "
+                                "VALUES (%s, %s, %s, %s, %s, %s)",
+                                (video_id,
+                                 (pkg_row["name"] or "")[:500],
+                                 pkg_url,
+                                 (pkg_row["description"] or "")[:5000],
+                                 pkg_row["dialect"] or "unknown",
+                                 "package_review_routed"),
+                            )
+                        except Exception as e:
+                            log.warning("Could not insert routed video %s: %s",
+                                        video_id, e)
+                        cur.execute("UPDATE scrape_raw SET package_id=NULL WHERE package_id=%s", (pkg_id,))
+                        cur.execute("DELETE FROM package_methods WHERE package_id=%s", (pkg_id,))
+                        cur.execute("DELETE FROM package_classes WHERE package_id=%s", (pkg_id,))
+                        cur.execute("DELETE FROM package_categories WHERE package_id=%s", (pkg_id,))
+                        cur.execute("DELETE FROM packages WHERE id=%s", (pkg_id,))
+                        routed += 1
+                        log.info("ROUTED to videos: %s (video_id=%s) — %s",
+                                 (pkg_row["name"] or ext_id)[:80], video_id, reason)
+                        continue
+                    # Could not extract a video_id — fall through to block.
+                    log.info("Video verdict but no extractable id for %s; blocking",
+                             ext_id)
+                    verdict = "block"
+                    if "reason" not in item:
+                        item["reason"] = f"video reference (no extractable id): {reason}"
+
                 if verdict == "block":
                     reason = item.get("reason", "LLM flagged as non-Smalltalk")
-                    # Find site_name for this package
-                    pkg_row = next((r for r in batch if r["id"] == pkg_id), None)
-                    site_name = pkg_row["site_name"] if pkg_row else "github"
-                    ext_id = pkg_row["qualified_name"] if pkg_row else str(pkg_id)
                     # Add to blocklist
                     cur.execute(
                         "INSERT IGNORE INTO blocklist (external_id, site_name, reason) "
@@ -275,7 +384,8 @@ def review_packages(conn, limit=None, model="claude-haiku-4-5-20251001",
             reviewed += len(batch)
 
             if reviewed % 100 == 0:
-                log.info("Progress: reviewed=%d kept=%d blocked=%d", reviewed, kept, blocked)
+                log.info("Progress: reviewed=%d kept=%d blocked=%d routed=%d",
+                         reviewed, kept, blocked, routed)
 
         except Exception as e:
             log.error("LLM batch error at offset %d: %s", i, e)
@@ -288,10 +398,11 @@ def review_packages(conn, limit=None, model="claude-haiku-4-5-20251001",
                 )
             conn.commit()
 
-    log.info("LLM review done: reviewed=%d kept=%d blocked=%d errors=%d",
-             reviewed, kept, blocked, errors)
+    log.info("LLM review done: reviewed=%d kept=%d blocked=%d routed=%d errors=%d",
+             reviewed, kept, blocked, routed, errors)
     cur.close()
-    return {"reviewed": reviewed, "blocked": blocked, "kept": kept, "errors": errors}
+    return {"reviewed": reviewed, "blocked": blocked, "kept": kept,
+            "routed": routed, "errors": errors}
 
 
 # ---------------------------------------------------------------------------
@@ -326,10 +437,19 @@ Keep videos where Smalltalk is a major focus: tutorials, conference
 talks (ESUG, Pharo Days, etc.), demos, live coding, IDE walkthroughs,
 historical deep-dives that substantially feature Smalltalk.
 
-For each video, respond with a JSON array of objects:
-[{"id": 123, "verdict": "keep"}, {"id": 456, "verdict": "block", "reason": "business small talk lesson"}]
+Sometimes the video queue receives an entry that is actually a code
+package or repo (the URL is a github.com / gitlab.com / sourceforge
+project page, not a watchable video).  When that happens, return verdict
+"package" so we can move it to the package review queue.  Only use
+"package" when the URL itself is clearly a code-hosting page.
 
-Verdicts: "keep" or "block". Only add "reason" for "block" verdicts.
+For each video, respond with a JSON array of objects:
+[{"id": 123, "verdict": "keep"},
+ {"id": 456, "verdict": "block", "reason": "business small talk lesson"},
+ {"id": 789, "verdict": "package", "reason": "github repo, not a video"}]
+
+Verdicts: "keep", "block", or "package".
+Only add "reason" for "block" or "package" verdicts.
 """
 
 
@@ -347,6 +467,8 @@ def _call_video_llm(videos, model):
             "dialect": v["dialect"],
             "source": v["source"],
         }
+        if v.get("url"):
+            item["url"] = v["url"]
         desc = (v.get("description") or "")[:1000]
         if desc:
             item["description"] = desc
@@ -362,48 +484,52 @@ def _call_video_llm(videos, model):
     text = resp.content[0].text.strip()
     if text.startswith("```"):
         text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
+    start = text.find("[")
+    end = text.rfind("]")
+    if start >= 0 and end > start:
+        text = text[start:end + 1]
     return json.loads(text)
 
 
 def review_videos(conn, limit=None, model="claude-haiku-4-5-20251001",
-                  scope="unreviewed"):
+                  scope="unreviewed", since_id=None, since_date=None):
     """LLM-review videos.
 
     scope: "unreviewed" — only NULL llm_review
            "upgrade"    — unreviewed + reviewed by a lower-tier model
            "all"        — every video
+    since_id:   only review videos with id >= this value
+    since_date: only review videos with created_at >= this value (str)
 
     Blocked videos are added to the blocklist and deleted.
     """
     cur = conn.cursor()
-    if scope == "all":
-        sql = """
-            SELECT id, video_id, title, description, channel_name,
-                   dialect, source, llm_review
-            FROM videos ORDER BY id
-        """
-    elif scope == "upgrade":
-        sql = """
-            SELECT id, video_id, title, description, channel_name,
-                   dialect, source, llm_review
-            FROM videos
-            WHERE llm_review IS NULL OR llm_review != %s
-            ORDER BY id
-        """
-    else:  # unreviewed
-        sql = """
-            SELECT id, video_id, title, description, channel_name,
-                   dialect, source, llm_review
-            FROM videos
-            WHERE llm_review IS NULL
-            ORDER BY id
-        """
+    params = []
+    cols = """id, video_id, title, description, url, channel_name,
+                   dialect, source, llm_review"""
+    base = f"SELECT {cols}\n            FROM videos"
+
+    conditions = []
+    if scope == "upgrade":
+        conditions.append("(llm_review IS NULL OR llm_review != %s)")
+        params.append(model)
+    elif scope != "all":  # unreviewed
+        conditions.append("llm_review IS NULL")
+
+    if since_id is not None:
+        conditions.append("id >= %s")
+        params.append(since_id)
+    if since_date is not None:
+        conditions.append("created_at >= %s")
+        params.append(since_date)
+
+    sql = base
+    if conditions:
+        sql += "\n            WHERE " + " AND ".join(conditions)
+    sql += "\n            ORDER BY id"
     if limit:
         sql += f" LIMIT {int(limit)}"
-    if scope == "upgrade":
-        cur.execute(sql, (model,))
-    else:
-        cur.execute(sql)
+    cur.execute(sql, params)
     rows = cur.fetchall()
 
     if scope == "upgrade":
@@ -418,7 +544,21 @@ def review_videos(conn, limit=None, model="claude-haiku-4-5-20251001",
     reviewed = 0
     blocked = 0
     kept = 0
+    routed = 0
     errors = 0
+
+    # Lazily create a routing scrape job + resolve site id when first needed
+    routing_job_id = None
+    web_site_id = None
+
+    def _ensure_routing_job():
+        nonlocal routing_job_id, web_site_id
+        if routing_job_id is None:
+            web_site_id = db.get_site_id(conn, "web_discovered")
+            routing_job_id = db.create_scrape_job(
+                conn, web_site_id, job_type="video_review_routed",
+            )
+        return routing_job_id, web_site_id
 
     for i in range(0, len(rows), VIDEO_BATCH_SIZE):
         batch = rows[i:i + VIDEO_BATCH_SIZE]
@@ -427,9 +567,43 @@ def review_videos(conn, limit=None, model="claude-haiku-4-5-20251001",
             for item in results:
                 vid_id = item["id"]
                 verdict = item["verdict"]
+                vid_row = next((r for r in batch if r["id"] == vid_id), None)
+
+                if verdict == "package":
+                    reason = item.get("reason", "actually a code package")
+                    vid_url = vid_row["url"] if vid_row else ""
+                    if vid_row and vid_url:
+                        meta = {
+                            "name": (vid_row["title"] or "")[:500],
+                            "url": vid_url,
+                            "source": "video_review_routed",
+                            "description": (vid_row["description"] or "")[:5000],
+                            "code_blocks": [],
+                            "code_block_count": 0,
+                            "file_links": [],
+                            "file_link_count": 0,
+                        }
+                        try:
+                            job_id, site_id_for_routing = _ensure_routing_job()
+                            db.insert_scrape_raw(
+                                conn, job_id, site_id_for_routing,
+                                vid_url[:500], meta,
+                            )
+                        except Exception as e:
+                            log.warning("Could not route video %s to packages: %s",
+                                        vid_id, e)
+                        cur.execute("DELETE FROM videos WHERE id = %s", (vid_id,))
+                        routed += 1
+                        title = vid_row["title"] if vid_row else "?"
+                        log.info("ROUTED to packages: %s — %s",
+                                 title[:80], reason)
+                        continue
+                    log.info("Package verdict but no URL for video id %s; blocking",
+                             vid_id)
+                    verdict = "block"
+
                 if verdict == "block":
                     reason = item.get("reason", "LLM flagged as not Smalltalk")
-                    vid_row = next((r for r in batch if r["id"] == vid_id), None)
                     video_id = vid_row["video_id"] if vid_row else str(vid_id)
                     # Add to blocklist so it doesn't come back on re-scrape
                     cur.execute(
@@ -451,8 +625,8 @@ def review_videos(conn, limit=None, model="claude-haiku-4-5-20251001",
             reviewed += len(batch)
 
             if reviewed % 100 == 0:
-                log.info("Video progress: reviewed=%d kept=%d blocked=%d",
-                         reviewed, kept, blocked)
+                log.info("Video progress: reviewed=%d kept=%d blocked=%d routed=%d",
+                         reviewed, kept, blocked, routed)
 
         except Exception as e:
             log.error("Video LLM batch error at offset %d: %s", i, e)
@@ -464,7 +638,8 @@ def review_videos(conn, limit=None, model="claude-haiku-4-5-20251001",
                 )
             conn.commit()
 
-    log.info("Video review done: reviewed=%d kept=%d blocked=%d errors=%d",
-             reviewed, kept, blocked, errors)
+    log.info("Video review done: reviewed=%d kept=%d blocked=%d routed=%d errors=%d",
+             reviewed, kept, blocked, routed, errors)
     cur.close()
-    return {"reviewed": reviewed, "blocked": blocked, "kept": kept, "errors": errors}
+    return {"reviewed": reviewed, "blocked": blocked, "kept": kept,
+            "routed": routed, "errors": errors}
