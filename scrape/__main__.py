@@ -8,6 +8,7 @@ Usage:
     python -m scrape custom <source>       # squeakmap | lukas_renggli | sourceforge | launchpad | all
     python -m scrape analyze [--limit N] [--min-urls 2] [--show] [--min-score 50]
     python -m scrape process [--limit N]
+    python -m scrape submissions [--limit N]
     python -m scrape block <external_id> [--site github] [--reason '...']
     python -m scrape llm-review [--limit N] [--fetch-only] [--review-only] [--model M] [--scope S]
     python -m scrape video-review [--limit N] [--model MODEL] [--scope S]
@@ -100,6 +101,15 @@ def cmd_process(args):
         else:
             result = process_all(conn)
     print(f"Process: processed={result['processed']} errors={result['errors']}")
+
+
+def cmd_submissions(args):
+    from .submissions import process_submissions
+    with db.connection() as conn:
+        result = process_submissions(conn, limit=args.limit)
+    print(f"Submissions: pending={result['pending']} added={result['added']} "
+          f"rejected={result['rejected']} skipped={result['skipped']} "
+          f"errors={result['errors']}")
 
 
 def cmd_llm_review(args):
@@ -254,6 +264,11 @@ def main():
     proc = sub.add_parser("process", help="Process scrape_raw into packages")
     proc.add_argument("--limit", type=int, default=None, help="Max rows to process")
 
+    subm = sub.add_parser("submissions",
+                          help="Process pending user-submitted URLs")
+    subm.add_argument("--limit", type=int, default=None,
+                      help="Max submissions to process")
+
     llm = sub.add_parser("llm-review", help="LLM quality review of packages")
     llm.add_argument("--limit", type=int, default=None, help="Max packages to review")
     llm.add_argument("--fetch-only", action="store_true", help="Only fetch READMEs, skip LLM")
@@ -300,6 +315,7 @@ def main():
         "custom": cmd_custom,
         "analyze": cmd_analyze,
         "process": cmd_process,
+        "submissions": cmd_submissions,
         "llm-review": cmd_llm_review,
         "video-review": cmd_video_review,
         "block": cmd_block,

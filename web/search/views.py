@@ -1,9 +1,16 @@
+import logging
+
+import requests
+from django.conf import settings
+from django.core.mail import send_mail
 from django.http import HttpResponse
 from django.shortcuts import render, get_object_or_404, redirect
 from django.core.paginator import Paginator
 from django.db.models import Q, Count
 from django.utils.html import escape as html_escape
 from .models import Package, Category, Site, PackageCategory, PackageClass, PackageMethod, SiteSubmission, Video
+
+log = logging.getLogger(__name__)
 
 SITEMAP_CHUNK = 10000
 
@@ -168,19 +175,84 @@ def videos(request):
     })
 
 
+def _verify_hcaptcha(token, remote_ip):
+    """Return True if hCaptcha accepts the token (or if hCaptcha isn't configured)."""
+    secret = settings.HCAPTCHA_SECRET
+    if not secret:
+        return True  # not configured — skip verification
+    if not token:
+        return False
+    try:
+        resp = requests.post(
+            "https://hcaptcha.com/siteverify",
+            data={"secret": secret, "response": token, "remoteip": remote_ip},
+            timeout=10,
+        )
+        resp.raise_for_status()
+        return bool(resp.json().get("success"))
+    except Exception as e:
+        log.warning("hCaptcha verification error: %s", e)
+        return False
+
+
+def _notify_submission(submission):
+    """Email the admin when a new URL is submitted.  Failure is non-fatal."""
+    to_addr = getattr(settings, "SUBMISSION_EMAIL_TO", "")
+    if not to_addr:
+        return
+    body = (
+        f"A new URL was submitted to soogle.org/submit/.\n\n"
+        f"URL:     {submission.url}\n"
+        f"IP:      {submission.ip_address or 'unknown'}\n"
+        f"When:    {submission.created_at}\n\n"
+        f"Comment:\n{submission.comment or '(none)'}\n"
+    )
+    try:
+        send_mail(
+            subject=f"[soogle] New URL submission: {submission.url[:80]}",
+            message=body,
+            from_email=settings.DEFAULT_FROM_EMAIL,
+            recipient_list=[to_addr],
+            fail_silently=False,
+        )
+    except Exception as e:
+        log.warning("Failed to send submission notification email: %s", e)
+
+
 def submit_site(request):
     """Form to submit a URL the user thinks we should index."""
+    ctx = {"hcaptcha_sitekey": settings.HCAPTCHA_SITEKEY}
+
     if request.method == "POST":
         url = request.POST.get("url", "").strip()
         comment = request.POST.get("comment", "").strip()
-        if url:
-            ip = request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip()
-            if not ip:
-                ip = request.META.get("REMOTE_ADDR", "")
-            SiteSubmission.objects.create(url=url[:2000], comment=comment[:5000], ip_address=ip)
+        honeypot = request.POST.get("website", "").strip()
+        token = request.POST.get("h-captcha-response", "")
+
+        ip = request.META.get("HTTP_X_FORWARDED_FOR", "").split(",")[0].strip()
+        if not ip:
+            ip = request.META.get("REMOTE_ADDR", "")
+
+        if honeypot:
+            # Bot filled the hidden field — pretend success without saving.
             return render(request, "search/submit_thanks.html", {"url": url})
 
-    return render(request, "search/submit.html")
+        if not url:
+            ctx.update({"error": "Please enter a URL.", "url": url, "comment": comment})
+            return render(request, "search/submit.html", ctx)
+
+        if not _verify_hcaptcha(token, ip):
+            ctx.update({"error": "Captcha verification failed. Please try again.",
+                        "url": url, "comment": comment})
+            return render(request, "search/submit.html", ctx)
+
+        submission = SiteSubmission.objects.create(
+            url=url[:2000], comment=comment[:5000], ip_address=ip
+        )
+        _notify_submission(submission)
+        return render(request, "search/submit_thanks.html", {"url": url})
+
+    return render(request, "search/submit.html", ctx)
 
 
 def robots_txt(request):

@@ -5,6 +5,13 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
+# Load .env from the repo root (one level above BASE_DIR / web/) if present.
+try:
+    from dotenv import load_dotenv
+    load_dotenv(BASE_DIR.parent / ".env")
+except ImportError:
+    pass
+
 SECRET_KEY = os.environ.get(
     "DJANGO_SECRET_KEY",
     "uAAsFWLtsEb0IaP6p995yqb1n1kZGo8ApXZtMRL5hHXyoNLvqWzgsq017H2fNWqtkUc",
@@ -64,3 +71,19 @@ STATIC_URL = "/static/"
 STATIC_ROOT = Path(__file__).resolve().parent.parent.parent / "www" / "static"
 
 DEFAULT_AUTO_FIELD = "django.db.models.BigAutoField"
+
+# --- hCaptcha (used on /submit/ form) ---
+HCAPTCHA_SITEKEY = os.environ.get("HCAPTCHA_SITEKEY", "")
+HCAPTCHA_SECRET = os.environ.get("HCAPTCHA_SECRET", "")
+
+# --- Email (notifications when a user submits a URL) ---
+EMAIL_BACKEND = os.environ.get(
+    "EMAIL_BACKEND", "django.core.mail.backends.smtp.EmailBackend"
+)
+EMAIL_HOST = os.environ.get("EMAIL_HOST", "localhost")
+EMAIL_PORT = int(os.environ.get("EMAIL_PORT", "25"))
+EMAIL_HOST_USER = os.environ.get("EMAIL_HOST_USER", "")
+EMAIL_HOST_PASSWORD = os.environ.get("EMAIL_HOST_PASSWORD", "")
+EMAIL_USE_TLS = os.environ.get("EMAIL_USE_TLS", "0") == "1"
+DEFAULT_FROM_EMAIL = os.environ.get("SUBMISSION_EMAIL_FROM", "noreply@soogle.org")
+SUBMISSION_EMAIL_TO = os.environ.get("SUBMISSION_EMAIL_TO", "")

@@ -7,6 +7,14 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
+# Load .env if present (DB creds, API keys, hCaptcha, email).
+if [ -f .env ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source .env
+    set +a
+fi
+
 export SOOGLE_DB_PASS="${SOOGLE_DB_PASS:-xrain}"
 
 PYTHON="python -m scrape"
@@ -15,6 +23,11 @@ LOG_PREFIX="[weekly $(date +%Y-%m-%d/%H:%M)]"
 log() { echo "$LOG_PREFIX $*"; }
 
 log "=== Starting weekly scrape ==="
+
+# --- User-submitted URLs (cheap; run before paid APIs) ---
+
+log "User submissions"
+$PYTHON submissions || log "WARN: submissions failed"
 
 # --- SERPAPI-based scrapers ---
 

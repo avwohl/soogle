@@ -1,6 +1,10 @@
 {% extends "search/base.html" %}
 {% block title %}Submit a site{% endblock %}
 
+{% block head_extra %}
+{% if hcaptcha_sitekey %}<script src="https://js.hcaptcha.com/1/api.js" async defer></script>{% endif %}
+{% endblock %}
+
 {% block body %}
 <div class="container">
 
@@ -20,20 +24,39 @@
     Let us know and we'll check it out.
   </p>
 
+  {% if error %}
+  <div style="background: #fde2e2; color: #7a1f1f; border: 1px solid #f5b5b5; padding: 10px 14px; border-radius: 6px; margin-bottom: 16px; max-width: 560px;">
+    {{ error }}
+  </div>
+  {% endif %}
+
   <form method="post" action="{% url 'submit_site' %}" style="max-width: 560px;">
     {% csrf_token %}
 
     <div style="margin-bottom: 16px;">
       <label for="url" style="display: block; font-weight: 600; margin-bottom: 4px;">URL</label>
       <input type="url" id="url" name="url" required placeholder="https://example.com/smalltalk-code"
+             value="{{ url|default:'' }}"
              style="width: 100%; padding: 10px 14px; font-size: 15px; border: 1px solid var(--border); border-radius: 6px;">
     </div>
 
     <div style="margin-bottom: 16px;">
       <label for="comment" style="display: block; font-weight: 600; margin-bottom: 4px;">Comment <span style="font-weight: normal; color: var(--muted);">(optional)</span></label>
       <textarea id="comment" name="comment" rows="4" placeholder="What kind of Smalltalk code is there? Which dialect?"
-                style="width: 100%; padding: 10px 14px; font-size: 15px; border: 1px solid var(--border); border-radius: 6px; resize: vertical;"></textarea>
+                style="width: 100%; padding: 10px 14px; font-size: 15px; border: 1px solid var(--border); border-radius: 6px; resize: vertical;">{{ comment|default:'' }}</textarea>
     </div>
+
+    {# Honeypot — real users leave this blank.  Hidden via inline style. #}
+    <div style="position: absolute; left: -9999px;" aria-hidden="true">
+      <label for="website">Website</label>
+      <input type="text" id="website" name="website" tabindex="-1" autocomplete="off">
+    </div>
+
+    {% if hcaptcha_sitekey %}
+    <div style="margin-bottom: 16px;">
+      <div class="h-captcha" data-sitekey="{{ hcaptcha_sitekey }}"></div>
+    </div>
+    {% endif %}
 
     <button type="submit"
             style="background: var(--accent); color: #fff; border: none; padding: 10px 28px; font-size: 15px; border-radius: 6px; cursor: pointer;">
