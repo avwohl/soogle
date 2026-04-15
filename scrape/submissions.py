@@ -76,7 +76,7 @@ def process_submissions(conn, limit=None):
 
     scraper = DiscoveryScraper(conn)
     site_id = scraper.site_id
-    job_id = db.create_scrape_job(conn, site_id, "submissions")
+    job_id = db.create_scrape_job(conn, site_id, "discovery")
 
     added = rejected = skipped = errors = 0
 
