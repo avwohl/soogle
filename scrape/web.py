@@ -569,6 +569,7 @@ _KNOWN_DOMAINS = {
     "en.wikipedia.org", "ja.wikipedia.org",
     "youtube.com", "www.youtube.com",
     "amazon.com", "www.amazon.com",
+    "source.squeak.org",
     # File archives and wikis — not package sources
     "ftp.squeak.org",
     "wiki.squeak.org",

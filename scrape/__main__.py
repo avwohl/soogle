@@ -5,7 +5,7 @@ Usage:
     python -m scrape web <source>          # squeaksource | smalltalkhub | rosettacode | vskb | all
     python -m scrape discover <engine>     # brave | serpapi | bing | ddg
     python -m scrape youtube [--playlists-only]
-    python -m scrape custom <source>       # squeakmap | lukas_renggli | sourceforge | launchpad | all
+    python -m scrape custom <source>       # squeakmap | lukas_renggli | sourceforge | launchpad | squeaktrunk | all
     python -m scrape analyze [--limit N] [--min-urls 2] [--show] [--min-score 50]
     python -m scrape process [--limit N]
     python -m scrape submissions [--limit N]
@@ -252,7 +252,8 @@ def main():
     cust = sub.add_parser("custom", help="Run custom scrapers for analyzed sites")
     cust.add_argument("source",
                       choices=["squeakmap", "lukas_renggli",
-                               "sourceforge", "launchpad", "all"],
+                               "sourceforge", "launchpad",
+                               "squeaktrunk", "all"],
                       help="Custom scraper to run")
 
     ana = sub.add_parser("analyze", help="LLM analysis of discovered domains")

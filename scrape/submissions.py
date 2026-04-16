@@ -6,14 +6,20 @@ Saved rows land in `scrape_raw` and flow through the existing
 process -> llm-review pipeline, where videos get rerouted to the videos
 table automatically.
 
+When a submitted URL looks like a multi-project site (many internal links
+or file downloads), an email is sent suggesting a dedicated scraper be
+written for it.
+
 Usage:
     python -m scrape submissions [--limit N]
 """
 
 import logging
+import smtplib
+from email.message import EmailMessage
 from urllib.parse import urlparse
 
-from . import db
+from . import config, db
 from .web import DiscoveryScraper
 
 log = logging.getLogger(__name__)
@@ -65,6 +71,55 @@ def _already_known(conn, url):
         return bool(cur.fetchone())
 
 
+# Minimum number of internal links or file links to flag a submission as a
+# potential multi-project site that warrants a dedicated scraper.
+_RICH_SITE_THRESHOLD = 10
+
+
+def _looks_like_rich_site(meta, children):
+    """Return True if extraction results suggest a multi-project site."""
+    if meta is None:
+        return len(children) >= _RICH_SITE_THRESHOLD
+    file_count = meta.get("file_link_count", 0)
+    code_count = meta.get("code_block_count", 0)
+    return (len(children) >= _RICH_SITE_THRESHOLD
+            or file_count >= _RICH_SITE_THRESHOLD
+            or (len(children) + file_count + code_count) >= _RICH_SITE_THRESHOLD)
+
+
+def _notify_rich_site(url, comment, child_count, file_count):
+    """Email admin that a submitted URL looks like it deserves a scraper."""
+    to_addr = config.SUBMISSION_EMAIL_TO
+    if not to_addr:
+        log.info("  SUBMISSION_EMAIL_TO not set, skipping rich-site notification")
+        return
+
+    hostname = urlparse(url).hostname or url
+    body = (
+        f"A user-submitted URL looks like a multi-project site that may\n"
+        f"warrant a dedicated scraper.\n\n"
+        f"URL:             {url}\n"
+        f"Hostname:        {hostname}\n"
+        f"Internal links:  {child_count}\n"
+        f"File links:      {file_count}\n"
+        f"User comment:    {comment or '(none)'}\n\n"
+        f"Consider writing a custom scraper and adding it to\n"
+        f"scrape/custom.py + CUSTOM_SCRAPERS.\n"
+    )
+    msg = EmailMessage()
+    msg["Subject"] = f"[soogle] Submitted URL may need a scraper: {hostname}"
+    msg["From"] = config.SUBMISSION_EMAIL_FROM
+    msg["To"] = to_addr
+    msg.set_content(body)
+
+    try:
+        with smtplib.SMTP(config.EMAIL_HOST, config.EMAIL_PORT) as smtp:
+            smtp.send_message(msg)
+        log.info("  sent rich-site notification for %s", hostname)
+    except Exception as e:
+        log.warning("  rich-site notification failed: %s", e)
+
+
 def process_submissions(conn, limit=None):
     """Process pending submissions.  Returns counts dict."""
     pending = _fetch_pending(conn, limit)
@@ -100,12 +155,20 @@ def process_submissions(conn, limit=None):
                 continue
 
             try:
-                meta, _children = scraper._extract_from_page(url)
+                meta, children = scraper._extract_from_page(url)
             except Exception as e:
                 log.error("  extract failed: %s", e)
                 errors += 1
                 # Leave as pending so a future run can retry.
                 continue
+
+            # Check if this looks like a multi-project site that should
+            # have its own dedicated scraper instead of a one-off entry.
+            file_count = (meta or {}).get("file_link_count", 0)
+            if _looks_like_rich_site(meta, children):
+                log.info("  rich site detected (%d children, %d files) — notifying",
+                         len(children), file_count)
+                _notify_rich_site(url, row["comment"], len(children), file_count)
 
             if meta is None:
                 # Page reachable but no Smalltalk content / no useful signal.

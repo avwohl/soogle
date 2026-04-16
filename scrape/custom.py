@@ -5,6 +5,7 @@ Covers:
     - Lukas Renggli     (Monticello repos at source.lukas-renggli.ch)
     - SourceForge       (Smalltalk projects directory)
     - Launchpad         (Smalltalk branches via REST API)
+    - Squeak Trunk      (source.squeak.org — Squeak core Monticello repos)
 
 Each scraper writes raw data into scrape_raw for later processing.
 
@@ -540,6 +541,170 @@ class LaunchpadScraper(BaseScraper):
 
 
 # ---------------------------------------------------------------------------
+# Squeak Trunk  (source.squeak.org)
+# ---------------------------------------------------------------------------
+class SqueakTrunkScraper(BaseScraper):
+    """Scrapes Monticello projects at source.squeak.org.
+
+    source.squeak.org is a SqueakSource3 (Seaside) instance hosting the
+    official Squeak trunk, release branches, VM Maker, FFI, and related
+    projects.  The scraper navigates the Seaside session to discover all
+    projects, extracts each project's stable slug, then fetches the
+    static file listing at /{slug} to enumerate .mcz packages.
+    """
+
+    BASE_URL = "https://source.squeak.org"
+
+    def __init__(self, conn):
+        super().__init__(conn, "squeaktrunk")
+
+    # -- Seaside navigation ------------------------------------------------
+
+    def _navigate_to_projects(self):
+        """Start a session and navigate to the Projects listing page."""
+        soup = self.soup(self.BASE_URL + "/")
+        for link in soup.find_all("a"):
+            if link.get_text(strip=True) == "Projects":
+                return self.soup(self.BASE_URL + link["href"])
+        return None
+
+    def _parse_project_table(self, soup):
+        """Extract project session hrefs from the Projects table."""
+        table = soup.find("table")
+        if not table:
+            return []
+
+        hrefs = []
+        for row in table.find_all("tr", recursive=False):
+            cls = row.get("class", [])
+            if "oddRow" not in cls and "evenRow" not in cls:
+                continue
+            cells = row.find_all("td", recursive=False)
+            if not cells:
+                continue
+            link = cells[0].find("a")
+            if link and link.get("href"):
+                hrefs.append(self.BASE_URL + link["href"])
+        return hrefs
+
+    def _extract_project_slug(self, detail_url):
+        """Follow a session link to a project detail page, return (slug, meta).
+
+        The detail page contains an MCHttpRepository location like:
+            location: 'http://source.squeak.org/trunk'
+        """
+        soup = self.soup(detail_url)
+        text = soup.get_text()
+
+        m = re.search(
+            r"location:\s*'http://source\.squeak\.org/([^']+)'", text,
+        )
+        if not m:
+            return None
+        slug = m.group(1)
+
+        meta = {
+            "name": slug,
+            "url": f"{self.BASE_URL}/{slug}",
+            "source": "squeaktrunk",
+        }
+
+        # Description (first <p> in the main content)
+        desc_el = soup.find("p")
+        if desc_el:
+            meta["description"] = desc_el.get_text(strip=True)[:2000]
+
+        # Stats from the page text
+        for pattern, key in [
+            (r"Total Versions:(\d+)", "version_count"),
+            (r"Total Downloads:(\d+)", "download_count"),
+        ]:
+            sm = re.search(pattern, text)
+            if sm:
+                meta[key] = sm.group(1).strip()
+
+        return slug, meta
+
+    # -- File listing ------------------------------------------------------
+
+    def _list_mcz_files(self, slug):
+        """Fetch the static listing at /{slug} and extract .mcz filenames."""
+        url = f"{self.BASE_URL}/{slug}"
+        try:
+            soup = self.soup(url)
+        except Exception:
+            return []
+        files = []
+        for a in soup.find_all("a", href=True):
+            href = a["href"]
+            if href.endswith(".mcz") or href.endswith(".mcm"):
+                files.append(href)
+        return files
+
+    # -- Main run ----------------------------------------------------------
+
+    def run(self):
+        job_id = db.create_scrape_job(self.conn, self.site_id, "full_crawl")
+        log.info("SqueakTrunk scrape job %d started", job_id)
+
+        found = saved = errors = 0
+        try:
+            listing = self._navigate_to_projects()
+            if listing is None:
+                raise RuntimeError("Could not navigate to source.squeak.org Projects page")
+
+            project_hrefs = self._parse_project_table(listing)
+            log.info("SqueakTrunk: %d projects in listing", len(project_hrefs))
+
+            for href in project_hrefs:
+                try:
+                    result = self._extract_project_slug(href)
+                    if result is None:
+                        continue
+                    slug, project_meta = result
+                    log.info("  project %s (slug=%s)", project_meta["name"], slug)
+
+                    mcz_files = self._list_mcz_files(slug)
+                    found += len(mcz_files)
+                    log.info("    %d .mcz/.mcm files", len(mcz_files))
+
+                    for mcz in mcz_files:
+                        try:
+                            # Parse package name: PackageName-author.N.mcz
+                            pkg_name = re.sub(r"-[^-]+\.\d+\.(mcz|mcm)$", "", mcz)
+                            meta = {
+                                "name": pkg_name,
+                                "qualified_name": f"{slug}/{pkg_name}",
+                                "url": f"{self.BASE_URL}/{slug}/{mcz}",
+                                "source": "squeaktrunk",
+                                "description": project_meta.get("description", ""),
+                                "project": slug,
+                                "filename": mcz,
+                            }
+                            ext_id = f"{slug}/{mcz}"
+                            row_id = db.insert_scrape_raw(
+                                self.conn, job_id, self.site_id, ext_id, meta,
+                            )
+                            if row_id:
+                                saved += 1
+                        except Exception as e:
+                            log.error("SqueakTrunk file %s/%s failed: %s", slug, mcz, e)
+                            errors += 1
+                except Exception as e:
+                    log.error("SqueakTrunk project failed: %s", e)
+                    errors += 1
+
+        except Exception as e:
+            log.exception("SqueakTrunk scrape failed")
+            db.finish_scrape_job(self.conn, job_id, found, saved, errors, str(e))
+            raise
+
+        db.finish_scrape_job(self.conn, job_id, found, saved, errors)
+        log.info("SqueakTrunk done: found=%d saved=%d errors=%d", found, saved, errors)
+        return {"found": found, "saved": saved, "errors": errors}
+
+
+# ---------------------------------------------------------------------------
 # Dispatch
 # ---------------------------------------------------------------------------
 CUSTOM_SCRAPERS = {
@@ -547,6 +712,7 @@ CUSTOM_SCRAPERS = {
     "lukas_renggli": LukasRenggliScraper,
     "sourceforge": SourceForgeScraper,
     "launchpad": LaunchpadScraper,
+    "squeaktrunk": SqueakTrunkScraper,
 }
 
 
