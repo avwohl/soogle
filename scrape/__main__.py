@@ -43,8 +43,13 @@ def cmd_web(args):
     if isinstance(result, dict) and "found" in result:
         print(f"{args.source}: found={result['found']} saved={result['saved']} errors={result['errors']}")
     else:
+        crashed = [name for name, r in result.items() if r.get("crashed")]
         for name, r in result.items():
-            print(f"{name}: found={r['found']} saved={r['saved']} errors={r['errors']}")
+            flag = "  CRASHED" if r.get("crashed") else ""
+            print(f"{name}: found={r['found']} saved={r['saved']} errors={r['errors']}{flag}")
+        if crashed:
+            log.error("web scrapers crashed: %s", ", ".join(crashed))
+            sys.exit(1)
 
 
 def cmd_discover(args):
@@ -76,10 +81,13 @@ def cmd_analyze(args):
             show_results(conn, min_score=args.min_score)
         else:
             result = analyze_domains(conn, limit=args.limit, min_urls=args.min_urls)
-            print(f"Analyze: analyzed={result['analyzed']} promising={result['promising']}")
+            print(f"Analyze: analyzed={result['analyzed']} promising={result['promising']} "
+                  f"errors={result['errors']}")
             if result["promising"]:
                 print("\nPromising domains (run with --show to see details):")
                 show_results(conn, min_score=50)
+            if result["errors"]:
+                sys.exit(1)
 
 
 def cmd_custom(args):
@@ -89,8 +97,13 @@ def cmd_custom(args):
     if isinstance(result, dict) and "found" in result:
         print(f"{args.source}: found={result['found']} saved={result['saved']} errors={result['errors']}")
     else:
+        crashed = [name for name, r in result.items() if r.get("crashed")]
         for name, r in result.items():
-            print(f"{name}: found={r['found']} saved={r['saved']} errors={r['errors']}")
+            flag = "  CRASHED" if r.get("crashed") else ""
+            print(f"{name}: found={r['found']} saved={r['saved']} errors={r['errors']}{flag}")
+        if crashed:
+            log.error("custom scrapers crashed: %s", ", ".join(crashed))
+            sys.exit(1)
 
 
 def cmd_process(args):
@@ -125,6 +138,8 @@ def cmd_llm_review(args):
                                      since_date=args.since_date)
             print(f"LLM review: reviewed={result['reviewed']} kept={result['kept']} "
                   f"blocked={result['blocked']} errors={result['errors']}")
+            if result["errors"]:
+                sys.exit(1)
 
 
 def cmd_video_review(args):
@@ -136,6 +151,8 @@ def cmd_video_review(args):
                                since_date=args.since_date)
     print(f"Video review: reviewed={result['reviewed']} kept={result['kept']} "
           f"blocked={result['blocked']} errors={result['errors']}")
+    if result["errors"]:
+        sys.exit(1)
 
 
 def cmd_block(args):

@@ -220,12 +220,8 @@ def _probe_site(session, domain, prefix="/"):
     }
 
 
-def _ask_llm(domain, sample_urls, probe):
+def _ask_llm(client, domain, sample_urls, probe):
     """Send site info to Claude and get structured assessment."""
-    import anthropic
-
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-
     user_parts = [f"Domain: {domain}"]
 
     prefix = probe.get("prefix", "/")
@@ -324,7 +320,7 @@ def analyze_domains(conn, limit=None, min_urls=2):
     domains = _get_discovered_domains(conn, min_urls=min_urls)
     if not domains:
         log.info("No new domains to analyze")
-        return {"analyzed": 0, "promising": 0}
+        return {"analyzed": 0, "promising": 0, "errors": 0}
 
     # Sort by URL count descending — most-seen domains first
     sorted_domains = sorted(domains.items(), key=lambda x: -x[1]["count"])
@@ -333,11 +329,17 @@ def analyze_domains(conn, limit=None, min_urls=2):
 
     log.info("Analyzing %d discovered domains", len(sorted_domains))
 
+    # Build the client up front so a missing 'anthropic' module or bad
+    # credentials fail loudly here instead of being swallowed per-domain.
+    import anthropic
+    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+
     session = requests.Session()
     session.headers.update({"User-Agent": config.USER_AGENT})
 
     analyzed = 0
     promising = 0
+    errors = 0
 
     for domain, info in sorted_domains:
         prefix = info.get("prefix", "/")
@@ -347,7 +349,7 @@ def analyze_domains(conn, limit=None, min_urls=2):
             probe = _probe_site(session, domain, prefix=prefix)
             time.sleep(1)
 
-            result = _ask_llm(domain, info["urls"], probe)
+            result = _ask_llm(client, domain, info["urls"], probe)
             if result is None:
                 log.warning("  skipped (LLM parse failure)")
                 continue
@@ -368,9 +370,11 @@ def analyze_domains(conn, limit=None, min_urls=2):
 
         except Exception as e:
             log.error("  failed: %s", e)
+            errors += 1
 
-    log.info("Analysis done: analyzed=%d promising=%d (score>=50)", analyzed, promising)
-    return {"analyzed": analyzed, "promising": promising}
+    log.info("Analysis done: analyzed=%d promising=%d errors=%d (score>=50)",
+             analyzed, promising, errors)
+    return {"analyzed": analyzed, "promising": promising, "errors": errors}
 
 
 def show_results(conn, min_score=0):

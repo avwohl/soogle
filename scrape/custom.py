@@ -725,8 +725,11 @@ def run_custom_scraper(conn, name):
             try:
                 results[n] = cls(conn).run()
             except Exception as e:
-                log.error("Scraper %s failed: %s", n, e)
-                results[n] = {"found": 0, "saved": 0, "errors": 1}
+                # A whole-scraper crash (e.g. a missing dependency) is distinct
+                # from routine per-item errors: flag it so the CLI exits
+                # non-zero and the periodic run is reported as FAILED.
+                log.error("Scraper %s crashed: %s", n, e)
+                results[n] = {"found": 0, "saved": 0, "errors": 1, "crashed": True}
         return results
 
     cls = CUSTOM_SCRAPERS.get(name)

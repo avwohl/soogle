@@ -209,11 +209,8 @@ def fetch_readmes(conn, limit=None):
     return fetched
 
 
-def _call_llm(packages, model):
+def _call_llm(client, packages, model):
     """Send a batch of packages to the LLM for classification."""
-    import anthropic
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-
     items = []
     for p in packages:
         item = {
@@ -272,8 +269,8 @@ def review_packages(conn, limit=None, model="claude-haiku-4-5-20251001",
     if scope == "upgrade":
         conditions.append("(p.llm_review IS NULL OR p.llm_review != %s)")
         params.append(model)
-    elif scope != "all":  # unreviewed
-        conditions.append("p.llm_review IS NULL")
+    elif scope != "all":  # unreviewed (also re-pick rows stranded as '<model>:error')
+        conditions.append("(p.llm_review IS NULL OR p.llm_review LIKE '%%:error')")
 
     if since_id is not None:
         conditions.append("p.id >= %s")
@@ -299,6 +296,12 @@ def review_packages(conn, limit=None, model="claude-haiku-4-5-20251001",
         log.info("No packages need LLM review")
         return {"reviewed": 0, "blocked": 0, "kept": 0, "errors": 0}
 
+    # Build the client up front so a missing 'anthropic' module or bad
+    # credentials fail loudly here, instead of being caught per-batch and
+    # silently marking every package as ':error' (which never gets retried).
+    import anthropic
+    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+
     log.info("LLM reviewing %d packages with %s", len(rows), model)
 
     reviewed = 0
@@ -311,7 +314,7 @@ def review_packages(conn, limit=None, model="claude-haiku-4-5-20251001",
     for i in range(0, len(rows), BATCH_SIZE):
         batch = rows[i:i + BATCH_SIZE]
         try:
-            results = _call_llm(batch, model)
+            results = _call_llm(client, batch, model)
             for item in results:
                 pkg_id = item["id"]
                 verdict = item["verdict"]
@@ -453,11 +456,8 @@ Only add "reason" for "block" or "package" verdicts.
 """
 
 
-def _call_video_llm(videos, model):
+def _call_video_llm(client, videos, model):
     """Send a batch of videos to the LLM for classification."""
-    import anthropic
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
-
     items = []
     for v in videos:
         item = {
@@ -513,8 +513,8 @@ def review_videos(conn, limit=None, model="claude-haiku-4-5-20251001",
     if scope == "upgrade":
         conditions.append("(llm_review IS NULL OR llm_review != %s)")
         params.append(model)
-    elif scope != "all":  # unreviewed
-        conditions.append("llm_review IS NULL")
+    elif scope != "all":  # unreviewed (also re-pick rows stranded as '<model>:error')
+        conditions.append("(llm_review IS NULL OR llm_review LIKE '%%:error')")
 
     if since_id is not None:
         conditions.append("id >= %s")
@@ -538,6 +538,12 @@ def review_videos(conn, limit=None, model="claude-haiku-4-5-20251001",
     if not rows:
         log.info("No videos need LLM review")
         return {"reviewed": 0, "blocked": 0, "kept": 0, "errors": 0}
+
+    # Build the client up front so a missing 'anthropic' module or bad
+    # credentials fail loudly here, instead of being caught per-batch and
+    # silently marking every video as ':error' (which never gets retried).
+    import anthropic
+    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
 
     log.info("LLM reviewing %d videos with %s", len(rows), model)
 
@@ -563,7 +569,7 @@ def review_videos(conn, limit=None, model="claude-haiku-4-5-20251001",
     for i in range(0, len(rows), VIDEO_BATCH_SIZE):
         batch = rows[i:i + VIDEO_BATCH_SIZE]
         try:
-            results = _call_video_llm(batch, model)
+            results = _call_video_llm(client, batch, model)
             for item in results:
                 vid_id = item["id"]
                 verdict = item["verdict"]

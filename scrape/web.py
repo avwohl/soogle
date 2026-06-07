@@ -983,7 +983,14 @@ def run_web_scraper(conn, name):
         results = {}
         for n, cls in SCRAPERS.items():
             log.info("--- Running %s scraper ---", n)
-            results[n] = cls(conn).run()
+            try:
+                results[n] = cls(conn).run()
+            except Exception as e:
+                # Don't let one scraper's crash (e.g. a missing dependency)
+                # abort the rest; flag it so the CLI exits non-zero and the
+                # periodic run is reported as FAILED.
+                log.error("Scraper %s crashed: %s", n, e)
+                results[n] = {"found": 0, "saved": 0, "errors": 1, "crashed": True}
         return results
 
     cls = SCRAPERS.get(name)
