@@ -23,7 +23,7 @@ from urllib.parse import urljoin, urlparse
 import requests
 from bs4 import BeautifulSoup
 
-from . import config, db
+from . import config, db, monticello
 
 log = logging.getLogger(__name__)
 
@@ -225,29 +225,36 @@ class LukasRenggliScraper(BaseScraper):
                 found += len(mcz_files)
                 log.info("  %s: %d .mcz files", project, len(mcz_files))
 
-                for mcz in mcz_files:
+                # One record per package, not per .mcz: the listing holds every
+                # version of every package. See scrape/monticello.py.
+                packages = monticello.collapse_versions(mcz_files)
+                log.info("  %s: %d packages", project, len(packages))
+
+                for pkg_name, info in packages.items():
                     try:
-                        # Parse package name from mcz filename
-                        # Format: PackageName-author.N.mcz
-                        pkg_name = re.sub(r"-[^-]+\.\d+\.mcz$", "", mcz)
-                        url = f"{self.BASE}/{project}/{mcz}"
+                        url = f"{self.BASE}/{project}/{info['latest']}"
                         meta = {
                             "name": pkg_name,
                             "qualified_name": f"{project}/{pkg_name}",
                             "url": url,
                             "source": "lukas_renggli",
-                            "description": f"Monticello package from {project} repository",
+                            "description": monticello.describe(
+                                pkg_name, project, "source.lukas-renggli.ch", info,
+                            ),
                             "project": project,
-                            "filename": mcz,
+                            "filename": info["latest"],
+                            "version_count": info["count"],
+                            "latest_version": info["version"],
+                            "latest_author": info["author"],
                         }
-                        ext_id = f"{project}/{mcz}"
+                        ext_id = f"{project}/{pkg_name}"
                         row_id = db.insert_scrape_raw(
                             self.conn, job_id, self.site_id, ext_id, meta,
                         )
                         if row_id:
                             saved += 1
                     except Exception as e:
-                        log.error("Failed %s/%s: %s", project, mcz, e)
+                        log.error("Failed %s/%s: %s", project, pkg_name, e)
                         errors += 1
 
         except Exception as e:
@@ -666,29 +673,44 @@ class SqueakTrunkScraper(BaseScraper):
 
                     mcz_files = self._list_mcz_files(slug)
                     found += len(mcz_files)
-                    log.info("    %d .mcz/.mcm files", len(mcz_files))
 
-                    for mcz in mcz_files:
+                    # One record per package, not per .mcz. A repository that
+                    # keeps its history lists every version of every package,
+                    # so keying on the filename made a search result per
+                    # version - soogle issue #1. See scrape/monticello.py.
+                    packages = monticello.collapse_versions(mcz_files)
+                    log.info("    %d .mcz/.mcm files -> %d packages",
+                             len(mcz_files), len(packages))
+
+                    for pkg_name, info in packages.items():
                         try:
-                            # Parse package name: PackageName-author.N.mcz
-                            pkg_name = re.sub(r"-[^-]+\.\d+\.(mcz|mcm)$", "", mcz)
                             meta = {
                                 "name": pkg_name,
                                 "qualified_name": f"{slug}/{pkg_name}",
-                                "url": f"{self.BASE_URL}/{slug}/{mcz}",
+                                "url": f"{self.BASE_URL}/{slug}/{info['latest']}",
                                 "source": "squeaktrunk",
-                                "description": project_meta.get("description", ""),
+                                # The repository's description belongs to the
+                                # repository, not to each package in it; it is
+                                # kept below under its own key rather than
+                                # being attributed to every package.
+                                "description": monticello.describe(
+                                    pkg_name, slug, "source.squeak.org", info,
+                                ),
+                                "repository_description": project_meta.get("description", ""),
                                 "project": slug,
-                                "filename": mcz,
+                                "filename": info["latest"],
+                                "version_count": info["count"],
+                                "latest_version": info["version"],
+                                "latest_author": info["author"],
                             }
-                            ext_id = f"{slug}/{mcz}"
+                            ext_id = f"{slug}/{pkg_name}"
                             row_id = db.insert_scrape_raw(
                                 self.conn, job_id, self.site_id, ext_id, meta,
                             )
                             if row_id:
                                 saved += 1
                         except Exception as e:
-                            log.error("SqueakTrunk file %s/%s failed: %s", slug, mcz, e)
+                            log.error("SqueakTrunk package %s/%s failed: %s", slug, pkg_name, e)
                             errors += 1
                 except Exception as e:
                     log.error("SqueakTrunk project failed: %s", e)
