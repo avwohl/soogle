@@ -38,6 +38,23 @@ _BARE = re.compile(r"^(?P<package>.+)\.(?P<ext>mcz|mcm)$")
 # offered as a package's download.
 _PARTIAL = re.compile(r"\.partial\.(mcz|mcm)$")
 
+# An upload whose extension got doubled: source.squeak.org/etoys carries
+# 'update-bf.31.mcm.mcm'.  Left alone the version-and-author part is hidden
+# behind the extra suffix, so the file becomes a package of its own named
+# after a version - the very shape issue #1 is about.  The inner extension is
+# the real one; strip the repeats before parsing, but keep the name on disk
+# for the URL.
+_DOUBLED_EXT = re.compile(r"^(?P<base>.+\.(?:mcz|mcm))\.(?:mcz|mcm)$")
+
+
+def _normalize(filename):
+    """Collapse a doubled .mcz/.mcm suffix down to one."""
+    while True:
+        m = _DOUBLED_EXT.match(filename)
+        if not m:
+            return filename
+        filename = m.group("base")
+
 
 def split_filename(filename):
     """Split a Monticello filename into (package, author, version).
@@ -50,11 +67,14 @@ def split_filename(filename):
         'Multilingual-Encodings-ul.7.mcz'
                                        -> ('Multilingual-Encodings', 'ul', 7)
         'update.squeak.123.mcm'        -> ('update.squeak.123', None, None)
+        'update-bf.31.mcm.mcm'         -> ('update', 'bf', 31)
         'X-tpr.142.partial.mcz'        -> (None, None, None)
         'notmonticello.txt'            -> (None, None, None)
     """
     if _PARTIAL.search(filename):
         return None, None, None
+
+    filename = _normalize(filename)
 
     m = _VERSIONED.match(filename)
     if m:

@@ -49,6 +49,17 @@ check(split_filename("index.html") == (None, None, None),
 # of its own nor be offered as anyone's download.
 check(split_filename("HelpSystem-Core-tpr.142.partial.mcz") == (None, None, None),
       "an interrupted upload (.partial.mcz) is rejected")
+# Also found in the wild: source.squeak.org/etoys carries
+# 'update-bf.31.mcm.mcm', uploaded with its extension doubled. Untreated it
+# hides the author and version, so the file becomes a package named after a
+# version - the shape this whole change exists to remove.
+check(split_filename("update-bf.31.mcm.mcm") == ("update", "bf", 31),
+      "a doubled extension is normalised before parsing")
+_dbl = collapse_versions(["update-bf.30.mcm", "update-bf.31.mcm.mcm"])
+check(list(_dbl) == ["update"] and _dbl["update"]["count"] == 2,
+      "so it joins its own package instead of becoming a new one")
+check(_dbl["update"]["latest"] == "update-bf.31.mcm.mcm",
+      "while the download link keeps the name that exists on disk")
 check("HelpSystem-Core" not in collapse_versions(["HelpSystem-Core-tpr.142.partial.mcz"]),
       "and does not create a package on its own")
 check(collapse_versions(["A-x.1.mcz", "A-x.2.partial.mcz"])["A"]["latest"] == "A-x.1.mcz",
