@@ -60,3 +60,7 @@ Thumbs.db
 
 # Local secrets
 .env
+# ...and any copy of it: a stray .env.bak would otherwise be committable,
+# and it holds the database password and every API key.
+.env.*
+!.env.example
