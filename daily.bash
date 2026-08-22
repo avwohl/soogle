@@ -7,7 +7,15 @@
 set -euo pipefail
 cd "$(dirname "$0")"
 
-export SOOGLE_DB_PASS="${SOOGLE_DB_PASS:-xrain}"
+# Load .env (DB password, API keys). weekly.bash does this too and exports
+# through to here, but daily.bash is also run on its own, and then nothing
+# else would supply ANTHROPIC_API_KEY - the LLM phases would silently skip.
+if [ -f .env ]; then
+    set -a
+    # shellcheck disable=SC1091
+    source .env
+    set +a
+fi
 
 PYTHON="python -m scrape"
 LOG_PREFIX="[daily $(date +%Y-%m-%d/%H:%M)]"

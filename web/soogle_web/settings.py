@@ -12,6 +12,17 @@ try:
 except ImportError:
     pass
 
+def _required(name):
+    """A setting with no safe default - the password belongs in .env."""
+    value = os.environ.get(name)
+    if not value:
+        raise RuntimeError(
+            f"{name} is not set. Add it to the .env file in the repo root; "
+            "mod_wsgi does not inherit the shell environment."
+        )
+    return value
+
+
 SECRET_KEY = os.environ.get(
     "DJANGO_SECRET_KEY",
     "uAAsFWLtsEb0IaP6p995yqb1n1kZGo8ApXZtMRL5hHXyoNLvqWzgsq017H2fNWqtkUc",
@@ -55,7 +66,7 @@ DATABASES = {
         "ENGINE": "django.db.backends.mysql",
         "NAME": os.environ.get("SOOGLE_DB_NAME", "soogle"),
         "USER": os.environ.get("SOOGLE_DB_USER", "root"),
-        "PASSWORD": os.environ.get("SOOGLE_DB_PASS", "xrain"),
+        "PASSWORD": _required("SOOGLE_DB_PASS"),
         "HOST": os.environ.get("SOOGLE_DB_HOST", "127.0.0.1"),
         "PORT": os.environ.get("SOOGLE_DB_PORT", "3306"),
         "OPTIONS": {"charset": "utf8mb4"},

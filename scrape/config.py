@@ -15,7 +15,14 @@ except ImportError:
 DB_HOST = os.environ.get("SOOGLE_DB_HOST", "127.0.0.1")
 DB_PORT = int(os.environ.get("SOOGLE_DB_PORT", "3306"))
 DB_USER = os.environ.get("SOOGLE_DB_USER", "root")
-DB_PASS = os.environ.get("SOOGLE_DB_PASS", "[elided]")
+# No default: the database password belongs in .env (gitignored), not in
+# the source. A missing value fails here rather than surfacing later as an
+# "Access denied for user" traceback from deep inside a scrape.
+DB_PASS = os.environ.get("SOOGLE_DB_PASS")
+if not DB_PASS:
+    raise RuntimeError(
+        "SOOGLE_DB_PASS is not set. Add it to the .env file in the repo root."
+    )
 DB_NAME = os.environ.get("SOOGLE_DB_NAME", "soogle")
 
 # GitHub

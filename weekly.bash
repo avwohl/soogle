@@ -15,7 +15,6 @@ if [ -f .env ]; then
     set +a
 fi
 
-export SOOGLE_DB_PASS="${SOOGLE_DB_PASS:-xrain}"
 
 PYTHON="python -m scrape"
 LOG_PREFIX="[weekly $(date +%Y-%m-%d/%H:%M)]"
