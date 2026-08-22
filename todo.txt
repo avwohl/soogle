@@ -1,0 +1,75 @@
+soogle — open work
+==================
+
+Written 2026-08-22, after fixing GitHub issue #1 (Monticello listings were
+indexed once per version instead of once per package).
+
+
+1. Descriptions from version messages
+-------------------------------------
+The remaining half of issue #1, and the only substantive item here.
+
+Descriptions today state facts about the listing:
+
+    Monticello package 'ToolsTests' in the trunk repository at
+    source.squeak.org. Latest ToolsTests-ct.137.mcz; 134 versions.
+
+True, and better than the repository blurb that used to be copied onto every
+package, but it does not say what the package *is*. Monticello has no
+per-package description; the closest thing that genuinely belongs to a
+package is the commit message on its newest version, which is what
+LinqLover pointed at in the issue.
+
+Getting it means fetching and unzipping each .mcz to read its version info.
+That is a scraper of a different shape from the listing walk — network-heavy,
+needs caching so a rescrape does not refetch thousands of archives — so it is
+its own piece of work rather than a tweak to scrape/monticello.py.
+
+
+2. Watch the first scheduled run on the new code
+------------------------------------------------
+The weekly job (Sundays 04:30, /etc/crontab -> periodic.sh -> weekly.d/
+30-soogle.sh -> weekly.bash -> daily.bash) has not yet run since the
+credential change. Two things to look at in /local/var/log/periodic/:
+
+  - `custom all` now writes far fewer rows than it used to, by design.
+  - The SOOGLE_DB_PASS export was removed from daily.bash and weekly.bash;
+    the value comes from .env now, read directly by scrape/config.py.
+
+Both paths were verified by hand with the variable unset, but the cron path
+runs as root and drops to wohl via `su -l`, and that has not been exercised
+end to end.
+
+
+3. The web app has no tests
+---------------------------
+web/search/tests.py is an empty stub — `manage.py test` reports 0 tests.
+
+On 2026-08-22 the site returned 500 for about five minutes because
+settings.py raised during import: it had been loading .env through
+python-dotenv, which is not importable by the mod_wsgi daemon user, inside a
+try/except ImportError that hid the failure. Any smoke test that imported the
+settings module and fetched one page would have caught it before deploy.
+
+The scrape side has tests/test_monticello.py (26 checks, no framework, run
+with `python3 tests/test_monticello.py`). The web side has nothing.
+
+
+4. Housekeeping
+---------------
+The one-off backups taken during the issue #1 migration — a database dump and
+a config copy, both under /home/wohl/backups/ on the server — sit outside the
+weekly rotation, so nothing will ever clean them up. Delete them once the
+rebuilt index has been running long enough to trust.
+
+
+5. The other scrapers have not been audited
+-------------------------------------------
+Issue #1 was a per-version identity bug in the two scrapers that walk
+Monticello .mcz listings. Both are fixed. The others were checked only for
+that same defect, and do not have it — SmalltalkHub keys on owner/name,
+SqueakMap on a UUID, neither one per file.
+
+That is not the same as having reviewed them for correctness. Nobody has
+looked at whether SqueakMap, SmalltalkHub, SourceForge, Launchpad or the
+GitHub scraper have identity or metadata bugs of their own kind.
