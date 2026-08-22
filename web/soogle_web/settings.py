@@ -5,12 +5,40 @@ from pathlib import Path
 
 BASE_DIR = Path(__file__).resolve().parent.parent
 
-# Load .env from the repo root (one level above BASE_DIR / web/) if present.
-try:
-    from dotenv import load_dotenv
-    load_dotenv(BASE_DIR.parent / ".env")
-except ImportError:
-    pass
+def _load_env_file(path):
+    """Read KEY=VALUE lines from .env into the environment.
+
+    Deliberately not python-dotenv. That package is installed only in a
+    user-local site-packages here, which the mod_wsgi daemon - running as
+    www-data - cannot read, so `from dotenv import load_dotenv` raised
+    ImportError, the except swallowed it, and .env was never loaded at all.
+    Nobody noticed while the password had a hardcoded default to fall back
+    on. A dozen lines of parsing removes both the dependency and the trap.
+
+    An existing environment variable wins, so an explicit export still
+    overrides the file.
+    """
+    try:
+        text = path.read_text()
+    except OSError:
+        return
+    for line in text.splitlines():
+        line = line.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):]
+        key, sep, value = line.partition("=")
+        if not sep:
+            continue
+        value = value.strip()
+        if len(value) >= 2 and value[0] == value[-1] and value[0] in "\"'":
+            value = value[1:-1]
+        os.environ.setdefault(key.strip(), value)
+
+
+# Load .env from the repo root (one level above BASE_DIR / web/).
+_load_env_file(BASE_DIR.parent / ".env")
 
 def _required(name):
     """A setting with no safe default - the password belongs in .env."""
