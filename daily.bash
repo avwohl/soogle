@@ -17,10 +17,31 @@ if [ -f .env ]; then
     set +a
 fi
 
-PYTHON="python -m scrape"
+# Interpreter.  Do NOT go back to a bare `python`: this host has only python3,
+# and the `python` that used to answer here came from a bundled emsdk toolchain
+# on wohl's login PATH.  An unrelated emsdk reinstall on 2026-09-03 dropped it
+# and every phase below died with "python: command not found".  Pin python3;
+# PYTHON_BIN overrides it for dev or a venv.
+PYTHON_BIN="${PYTHON_BIN:-python3}"
+PYTHON="$PYTHON_BIN -m scrape"
 LOG_PREFIX="[daily $(date +%Y-%m-%d/%H:%M)]"
 
 log() { echo "$LOG_PREFIX $*"; }
+
+# Preflight: die here, loudly, rather than emitting one "command not found" per
+# phase.  Every phase below only WARNs on failure, so a missing interpreter used
+# to surface as a wall of unrelated warnings instead of one root cause.
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+    log "FATAL: interpreter '$PYTHON_BIN' is not on PATH"
+    log "FATAL: PATH=$PATH"
+    exit 1
+fi
+if ! deps=$("$PYTHON_BIN" -c 'import requests, pymysql, bs4, anthropic' 2>&1); then
+    log "FATAL: $PYTHON_BIN cannot import the required modules:"
+    printf '%s\n' "$deps" | sed 's/^/    /'
+    log "FATAL: try: $PYTHON_BIN -m pip install -r requirements.txt"
+    exit 1
+fi
 
 # Track whether any phase failed.  Phases keep running on failure (one flaky
 # scraper shouldn't abort the whole pipeline) but we exit non-zero at the end

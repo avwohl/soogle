@@ -16,10 +16,30 @@ if [ -f .env ]; then
 fi
 
 
-PYTHON="python -m scrape"
+# Interpreter.  See the matching comment in daily.bash: bare `python` does not
+# exist on this host, and the one that used to be on the login PATH came from a
+# bundled emsdk toolchain that got reinstalled out from under us on 2026-09-03.
+# Exported so the daily.bash run at the end of this script uses the same one.
+export PYTHON_BIN="${PYTHON_BIN:-python3}"
+PYTHON="$PYTHON_BIN -m scrape"
 LOG_PREFIX="[weekly $(date +%Y-%m-%d/%H:%M)]"
 
 log() { echo "$LOG_PREFIX $*"; }
+
+# Preflight: die here, loudly, rather than emitting one "command not found" per
+# phase.  Every phase below only WARNs on failure, so a missing interpreter used
+# to surface as a wall of unrelated warnings instead of one root cause.
+if ! command -v "$PYTHON_BIN" >/dev/null 2>&1; then
+    log "FATAL: interpreter '$PYTHON_BIN' is not on PATH"
+    log "FATAL: PATH=$PATH"
+    exit 1
+fi
+if ! deps=$("$PYTHON_BIN" -c 'import requests, pymysql, bs4, anthropic' 2>&1); then
+    log "FATAL: $PYTHON_BIN cannot import the required modules:"
+    printf '%s\n' "$deps" | sed 's/^/    /'
+    log "FATAL: try: $PYTHON_BIN -m pip install -r requirements.txt"
+    exit 1
+fi
 
 # Track whether any phase failed so the caller (periodic.sh) reports the run
 # as FAILED instead of "ok".  Phases keep running on failure.
