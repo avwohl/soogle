@@ -16,11 +16,11 @@ if [ -f .env ]; then
 fi
 
 
-# Interpreter.  See the matching comment in daily.bash: bare `python` does not
-# exist on this host, and the one that used to be on the login PATH came from a
-# bundled emsdk toolchain that got reinstalled out from under us on 2026-09-03.
-# Exported so the daily.bash run at the end of this script uses the same one.
-export PYTHON_BIN="${PYTHON_BIN:-python3}"
+# Interpreter.  See the matching comment in daily.bash: this was a bare `python`
+# that resolved through a ~/bin symlink which vanished on 2026-09-03, so it is
+# an absolute path now.  Exported so the daily.bash run at the end of this
+# script uses the same one.
+export PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
 PYTHON="$PYTHON_BIN -m scrape"
 LOG_PREFIX="[weekly $(date +%Y-%m-%d/%H:%M)]"
 

@@ -17,12 +17,15 @@ if [ -f .env ]; then
     set +a
 fi
 
-# Interpreter.  Do NOT go back to a bare `python`: this host has only python3,
-# and the `python` that used to answer here came from a bundled emsdk toolchain
-# on wohl's login PATH.  An unrelated emsdk reinstall on 2026-09-03 dropped it
-# and every phase below died with "python: command not found".  Pin python3;
-# PYTHON_BIN overrides it for dev or a venv.
-PYTHON_BIN="${PYTHON_BIN:-python3}"
+# Interpreter.  Absolute on purpose.  This was a bare `python`, which resolved
+# through ~/bin/python -- a symlink carried in the avwohl/bin repo, and ~/bin is
+# fifth on wohl's login PATH while /usr/bin is tenth.  That repo is shared with
+# a Mac: a cleanup commit there deleted the symlink, a `git reset --hard` landed
+# it on this host on 2026-09-03, and the 2026-09-06 weekly run died with
+# "python: command not found" in every phase.  An absolute path cannot be
+# shadowed by anything earlier on PATH, which is the whole point.
+# PYTHON_BIN overrides it for a dev box or a venv.
+PYTHON_BIN="${PYTHON_BIN:-/usr/bin/python3}"
 PYTHON="$PYTHON_BIN -m scrape"
 LOG_PREFIX="[daily $(date +%Y-%m-%d/%H:%M)]"
 

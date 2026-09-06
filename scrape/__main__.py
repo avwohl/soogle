@@ -34,6 +34,8 @@ def cmd_github(args):
         scraper = GitHubScraper(conn)
         result = scraper.run(incremental=args.incremental)
     print(f"GitHub: found={result['found']} saved={result['saved']} errors={result['errors']}")
+    if result["errors"]:
+        sys.exit(1)
 
 
 def cmd_web(args):
@@ -114,6 +116,8 @@ def cmd_process(args):
         else:
             result = process_all(conn)
     print(f"Process: processed={result['processed']} errors={result['errors']}")
+    if result["errors"]:
+        sys.exit(1)
 
 
 def cmd_submissions(args):
