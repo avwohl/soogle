@@ -47,7 +47,7 @@ Each scraper fetches metadata from its source and writes rows into the `scrape_r
 
 ### 2. Process — normalize into packages
 
-`python -m scrape process` reads pending rows from `scrape_raw` and for each one:
+`uv run python -m scrape process` reads pending rows from `scrape_raw` and for each one:
 
 - Detects the Smalltalk **dialect** from GitHub topics and name/description keywords (pharo, squeak, cuis, etc.) with a confidence score
 - **Auto-categorizes** into one or more of 19 categories (web, database, testing, ui/graphics, etc.) via keyword matching
@@ -56,7 +56,7 @@ Each scraper fetches metadata from its source and writes rows into the `scrape_r
 
 ### 3. LLM review — filter false positives
 
-`python -m scrape llm-review` sends batches of packages to Claude for quality review. The LLM catches false positives that regex alone misses:
+`uv run python -m scrape llm-review` sends batches of packages to Claude for quality review. The LLM catches false positives that regex alone misses:
 
 - C# / .NET projects (GitHub's linguist confuses `.cs` changesets with Smalltalk)
 - IEC 61131-3 Structured Text / PLC code (`.st` extension overlap)
@@ -65,7 +65,7 @@ Each scraper fetches metadata from its source and writes rows into the `scrape_r
 
 Packages marked "block" are added to a blocklist and deleted. Packages marked "keep" are stamped with the model name that reviewed them.
 
-`python -m scrape video-review` does the same for videos — blocks conversation-skills videos, design-pattern talks that only mention Smalltalk in passing, GemStone jewelry content, and spam.
+`uv run python -m scrape video-review` does the same for videos — blocks conversation-skills videos, design-pattern talks that only mention Smalltalk in passing, GemStone jewelry content, and spam.
 
 Both commands support a **model tier system** (haiku < sonnet < opus). The `--scope upgrade` flag re-reviews items that were previously reviewed by a lower-tier model, so you can upgrade quality without reprocessing everything.
 
@@ -107,9 +107,10 @@ Runs paid-API scrapers (SerpAPI free tier: ~100 searches/month), then calls `dai
 
 ```
 soogle/
+  mise.toml               Dev tools (uv, ruff, prek) + task runner
   daily.bash              Daily cron script (free scrapers + processing)
   weekly.bash             Weekly cron script (paid APIs + daily.bash)
-  requirements.txt        requests, pymysql, beautifulsoup4
+   pyproject.toml        dependencies (requests, pymysql, beautifulsoup4, anthropic, django)
   db/schema.sql           Full database schema and seed data
   scrape/
     __main__.py           CLI entry point (python -m scrape <command>)
@@ -137,24 +138,25 @@ soogle/
 ## CLI reference
 
 ```
-python -m scrape github [--incremental | --since YYYY-MM-DD]
-python -m scrape web <source>                    # squeaksource | smalltalkhub | rosettacode | vskb | all
-python -m scrape custom <source>                 # squeakmap | lukas_renggli | sourceforge | launchpad | all
-python -m scrape youtube [--playlists-only]
-python -m scrape discover <engine>               # brave | serpapi | bing | ddg
-python -m scrape process [--limit N]
-python -m scrape analyze [--limit N] [--show] [--min-score 50]
-python -m scrape llm-review [--model M] [--scope S] [--limit N] [--fetch-only] [--review-only]
-python -m scrape video-review [--model M] [--scope S] [--limit N]
-python -m scrape block <external_id> [--site github] [--reason '...']
-python -m scrape status
+uv run python -m scrape github [--incremental | --since YYYY-MM-DD]
+uv run python -m scrape web <source>                    # squeaksource | smalltalkhub | rosettacode | vskb | all
+uv run python -m scrape custom <source>                 # squeakmap | lukas_renggli | sourceforge | launchpad | all
+uv run python -m scrape youtube [--playlists-only]
+uv run python -m scrape discover <engine>               # brave | serpapi | bing | ddg
+uv run python -m scrape process [--limit N]
+uv run python -m scrape analyze [--limit N] [--show] [--min-score 50]
+uv run python -m scrape llm-review [--model M] [--scope S] [--limit N] [--fetch-only] [--review-only]
+uv run python -m scrape video-review [--model M] [--scope S] [--limit N]
+uv run python -m scrape block <external_id> [--site github] [--reason '...']
+uv run python -m scrape status
 ```
 
 ## Requirements
 
+- [mise](https://mise.jdx.dev) — dev tools (uv, ruff, prek) and task runner
 - Python 3.10+
 - MySQL / MariaDB
-- `pip install -r requirements.txt` (requests, pymysql, beautifulsoup4)
+- `mise install` (installs uv, ruff, prek + git hooks)
 
 Environment variables:
 
@@ -166,6 +168,10 @@ Environment variables:
 ## Running
 
 ```bash
+# Install dependencies and git hooks
+mise install
+mise run install        # uv sync
+
 # Run the daily pipeline
 ./daily.bash
 
@@ -173,13 +179,17 @@ Environment variables:
 ./weekly.bash
 
 # Run individual commands
-python -m scrape github --incremental
-python -m scrape process
-python -m scrape llm-review --model claude-haiku-4-5-20251001 --scope unreviewed
+uv run python -m scrape github --incremental
+uv run python -m scrape process
+uv run python -m scrape llm-review --model claude-haiku-4-5-20251001 --scope unreviewed
 
 # Run the web server
-cd web
-python manage.py runserver
+mise run server         # uv run python web/manage.py runserver
+
+# Tests and lint
+mise run test
+mise run lint
+mise run hooks          # prek run (all git hooks)
 ```
 
 ## Related

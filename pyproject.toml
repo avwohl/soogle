@@ -1,0 +1,20 @@
+[project]
+name = "soogle"
+version = "0.2.0"
+description = "Smalltalk code search engine"
+requires-python = ">=3.10"
+dependencies = [
+    "requests>=2.31",
+    "pymysql>=1.1",
+    "beautifulsoup4>=4.12",
+    "anthropic>=0.40",
+    "django>=4.2",
+]
+
+[dependency-groups]
+dev = [
+    "pytest>=7.0",
+]
+
+[tool.ruff]
+line-length = 180

@@ -11,7 +11,7 @@
       web.py             SqueakSource, SmalltalkHub, Rosetta Code scrapers               
       processor.py       scrape_raw → packages (dialect detection, auto-categorization, atomic   
   upsert)                                                                                
-  requirements.txt                                                                               
+   pyproject.toml
                                                                                                  
   CLI                                           
                                                                                                  
