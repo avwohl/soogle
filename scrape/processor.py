@@ -8,11 +8,23 @@ Usage:
     python -m scrape process [--limit 100]
 """
 
-import re
 import json
 import logging
-from datetime import datetime, timedelta
+import re
+from datetime import datetime
+
+from sqlalchemy import func, select
+from tqdm import tqdm
+
 from . import config, db
+from .schema import (
+    categories,
+    package_categories,
+    package_classes,
+    package_methods,
+    packages,
+    scrape_raw,
+)
 
 log = logging.getLogger(__name__)
 
@@ -262,11 +274,11 @@ def process_one(conn, raw_row):
 
     # Blocklist check
     if db.is_blocked(conn, site_name, external_id):
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE scrape_raw SET status='processed', processed_at=NOW() WHERE id=%s",
-                (raw_id,),
-            )
+        conn.execute(
+            scrape_raw.update()
+            .where(scrape_raw.c.id == raw_id)
+            .values(status="processed", processed_at=func.now())
+        )
         conn.commit()
         return
 
@@ -280,11 +292,11 @@ def process_one(conn, raw_row):
 
     # Quality gate: skip GitHub repos with no signal they're real Smalltalk
     def _skip_junk(reason):
-        with conn.cursor() as cur:
-            cur.execute(
-                "UPDATE scrape_raw SET status='processed', processed_at=NOW() WHERE id=%s",
-                (raw_id,),
-            )
+        conn.execute(
+            scrape_raw.update()
+            .where(scrape_raw.c.id == raw_id)
+            .values(status="processed", processed_at=func.now())
+        )
         conn.commit()
 
     if site_name == "github":
@@ -297,99 +309,74 @@ def process_one(conn, raw_row):
             return
 
     # Auto-categorize
-    categories = auto_categorize(meta)
+    cats = auto_categorize(meta)
 
     # Determine if active
     active = _is_active(pkg.get("source_pushed_at"))
 
     # Atomic upsert
     with db.transaction(conn):
-        cur = conn.cursor()
-
         # Upsert package
-        cur.execute("""
-            INSERT INTO packages (
-                name, qualified_name, description,
-                dialect, dialect_confidence, file_format,
-                site_id, external_id, url, clone_url,
-                stars, forks, size_kb, license,
-                is_fork, is_archived, default_branch, topics,
-                source_created_at, source_updated_at, source_pushed_at,
-                is_active, last_scraped_at, scrape_checksum
-            ) VALUES (
-                %s, %s, %s,
-                %s, %s, 'unknown',
-                %s, %s, %s, %s,
-                %s, %s, %s, %s,
-                %s, %s, %s, %s,
-                %s, %s, %s,
-                %s, NOW(), %s
-            )
-            ON DUPLICATE KEY UPDATE
-                name = VALUES(name),
-                qualified_name = VALUES(qualified_name),
-                description = VALUES(description),
-                dialect = VALUES(dialect),
-                dialect_confidence = VALUES(dialect_confidence),
-                url = VALUES(url),
-                clone_url = VALUES(clone_url),
-                stars = VALUES(stars),
-                forks = VALUES(forks),
-                size_kb = VALUES(size_kb),
-                license = VALUES(license),
-                is_fork = VALUES(is_fork),
-                is_archived = VALUES(is_archived),
-                default_branch = VALUES(default_branch),
-                topics = VALUES(topics),
-                source_created_at = VALUES(source_created_at),
-                source_updated_at = VALUES(source_updated_at),
-                source_pushed_at = VALUES(source_pushed_at),
-                is_active = VALUES(is_active),
-                last_scraped_at = NOW(),
-                scrape_checksum = VALUES(scrape_checksum)
-        """, (
-            pkg["name"], pkg["qualified_name"], pkg["description"],
-            dialect, dialect_confidence,
-            site_id, external_id, pkg["url"], pkg["clone_url"],
-            pkg["stars"], pkg["forks"], pkg["size_kb"], pkg["license"],
-            pkg["is_fork"], pkg["is_archived"], pkg["default_branch"], pkg["topics"],
-            _parse_timestamp(pkg["source_created_at"]),
-            _parse_timestamp(pkg["source_updated_at"]),
-            _parse_timestamp(pkg["source_pushed_at"]),
-            active, checksum,
-        ))
+        pkg_values = {
+            "name": pkg["name"],
+            "qualified_name": pkg["qualified_name"],
+            "description": pkg["description"],
+            "dialect": dialect,
+            "dialect_confidence": dialect_confidence,
+            "file_format": "unknown",
+            "site_id": site_id,
+            "external_id": external_id,
+            "url": pkg["url"],
+            "clone_url": pkg["clone_url"],
+            "stars": pkg["stars"],
+            "forks": pkg["forks"],
+            "size_kb": pkg["size_kb"],
+            "license": pkg["license"],
+            "is_fork": pkg["is_fork"],
+            "is_archived": pkg["is_archived"],
+            "default_branch": pkg["default_branch"],
+            "topics": pkg["topics"],
+            "source_created_at": _parse_timestamp(pkg["source_created_at"]),
+            "source_updated_at": _parse_timestamp(pkg["source_updated_at"]),
+            "source_pushed_at": _parse_timestamp(pkg["source_pushed_at"]),
+            "is_active": active,
+            "last_scraped_at": func.now(),
+            "scrape_checksum": checksum,
+        }
+        conn.execute(db.upsert(packages, pkg_values, ["site_id", "external_id"]))
 
         # Get the package id (works for both insert and update)
-        cur.execute(
-            "SELECT id FROM packages WHERE site_id = %s AND external_id = %s",
-            (site_id, external_id),
-        )
-        package_id = cur.fetchone()["id"]
+        package_id = conn.execute(
+            select(packages.c.id).where(
+                packages.c.site_id == site_id,
+                packages.c.external_id == external_id,
+            )
+        ).scalar_one()
 
         # Clear and re-insert related data
-        cur.execute("DELETE FROM package_methods WHERE package_id = %s", (package_id,))
-        cur.execute("DELETE FROM package_classes WHERE package_id = %s", (package_id,))
-        cur.execute("DELETE FROM package_categories WHERE package_id = %s", (package_id,))
+        conn.execute(package_methods.delete().where(package_methods.c.package_id == package_id))
+        conn.execute(package_classes.delete().where(package_classes.c.package_id == package_id))
+        conn.execute(package_categories.delete().where(package_categories.c.package_id == package_id))
 
         # Insert categories
-        for cat_name, confidence in categories:
-            cur.execute("SELECT id FROM categories WHERE name = %s", (cat_name,))
-            cat_row = cur.fetchone()
-            if cat_row:
-                cur.execute(
-                    "INSERT INTO package_categories (package_id, category_id, confidence) "
-                    "VALUES (%s, %s, %s)",
-                    (package_id, cat_row["id"], confidence),
+        for cat_name, confidence in cats:
+            cat_id = conn.execute(
+                select(categories.c.id).where(categories.c.name == cat_name)
+            ).scalar_one_or_none()
+            if cat_id:
+                conn.execute(
+                    package_categories.insert().values(
+                        package_id=package_id, category_id=cat_id, confidence=confidence,
+                    )
                 )
 
         # Mark scrape_raw as processed
-        cur.execute(
-            "UPDATE scrape_raw SET status='processed', processed_at=NOW(), package_id=%s "
-            "WHERE id = %s",
-            (package_id, raw_id),
+        conn.execute(
+            scrape_raw.update()
+            .where(scrape_raw.c.id == raw_id)
+            .values(status="processed", processed_at=func.now(), package_id=package_id)
         )
 
-        cur.close()
         return package_id
 
 
@@ -414,12 +401,12 @@ def process_batch(conn, limit=None):
             errors += 1
             log.error("Failed to process raw id %d (%s): %s", row["id"], row["external_id"], e)
             try:
-                with conn.cursor() as cur:
-                    cur.execute(
-                        "UPDATE scrape_raw SET status='failed', error_message=%s WHERE id=%s",
-                        (str(e)[:5000], row["id"]),
-                    )
-                    conn.commit()
+                conn.execute(
+                    scrape_raw.update()
+                    .where(scrape_raw.c.id == row["id"])
+                    .values(status="failed", error_message=str(e)[:5000])
+                )
+                conn.commit()
             except Exception:
                 pass
 
@@ -431,11 +418,13 @@ def process_all(conn):
     """Process all pending rows in batches."""
     total_processed = 0
     total_errors = 0
-    while True:
-        result = process_batch(conn)
-        total_processed += result["processed"]
-        total_errors += result["errors"]
-        if result["processed"] == 0 and result["errors"] == 0:
-            break
+    with tqdm(desc="process", unit="pkg", total=None) as pbar:
+        while True:
+            result = process_batch(conn)
+            total_processed += result["processed"]
+            total_errors += result["errors"]
+            pbar.update(result["processed"])
+            if result["processed"] == 0 and result["errors"] == 0:
+                break
     log.info("All done: processed=%d errors=%d", total_processed, total_errors)
     return {"processed": total_processed, "errors": total_errors}

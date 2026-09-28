@@ -22,6 +22,7 @@ from urllib.parse import urljoin, urlparse
 
 import requests
 from bs4 import BeautifulSoup
+from tqdm import tqdm
 
 from . import config, db, monticello
 
@@ -145,7 +146,7 @@ class SqueakMapScraper(BaseScraper):
             found = len(packages)
             log.info("SqueakMap: found %d packages", found)
 
-            for i, (uuid, name) in enumerate(packages):
+            for uuid, name in tqdm(packages, desc="squeakmap", unit="pkg"):
                 try:
                     meta = self._scrape_package(uuid, name)
                     row_id = db.insert_scrape_raw(
@@ -153,8 +154,6 @@ class SqueakMapScraper(BaseScraper):
                     )
                     if row_id:
                         saved += 1
-                    if (i + 1) % 50 == 0:
-                        log.info("SqueakMap progress: %d/%d saved=%d", i + 1, found, saved)
                 except Exception as e:
                     log.error("SqueakMap package %s (%s) failed: %s", name, uuid, e)
                     errors += 1
@@ -345,7 +344,7 @@ class SourceForgeScraper(BaseScraper):
             # Paginate through the directory
             all_slugs = []
             page = 1
-            while True:
+            for _ in tqdm(iter(int, 1), desc="sourceforge", unit="page", total=None):
                 slugs, has_next = self._get_directory_page(page)
                 if not slugs:
                     break
@@ -359,7 +358,7 @@ class SourceForgeScraper(BaseScraper):
             found = len(all_slugs)
             log.info("SourceForge: found %d Smalltalk projects", found)
 
-            for i, slug in enumerate(all_slugs):
+            for slug in (proj_bar := tqdm(all_slugs, desc="sourceforge", unit="proj")):
                 try:
                     meta = self._scrape_project(slug)
                     row_id = db.insert_scrape_raw(
@@ -367,11 +366,10 @@ class SourceForgeScraper(BaseScraper):
                     )
                     if row_id:
                         saved += 1
-                    if (i + 1) % 20 == 0:
-                        log.info("SourceForge progress: %d/%d saved=%d", i + 1, found, saved)
                 except Exception as e:
                     log.error("SourceForge project %s failed: %s", slug, e)
                     errors += 1
+                proj_bar.set_postfix(saved=saved, errors=errors)
 
         except Exception as e:
             log.exception("SourceForge scrape failed")
@@ -460,11 +458,13 @@ class LaunchpadScraper(BaseScraper):
             return [], project
 
         try:
-            while branches_url:
+            for _ in tqdm(iter(int, 1), desc="launchpad", unit="page", total=None):
                 data = self._get_api(branches_url)
                 for entry in data.get("entries", []):
                     branches.append(entry)
                 branches_url = data.get("next_collection_link")
+                if not branches_url:
+                    break
         except Exception as e:
             log.warning("Could not fetch branches for %s: %s", project_name, e)
 
@@ -479,7 +479,7 @@ class LaunchpadScraper(BaseScraper):
             projects = self._search_projects()
             log.info("Launchpad: found %d projects to check", len(projects))
 
-            for project_name in projects:
+            for project_name in tqdm(projects, desc="launchpad", unit="proj"):
                 branches, project_meta = self._get_project_branches(project_name)
                 if project_meta is None:
                     continue
@@ -663,7 +663,7 @@ class SqueakTrunkScraper(BaseScraper):
             project_hrefs = self._parse_project_table(listing)
             log.info("SqueakTrunk: %d projects in listing", len(project_hrefs))
 
-            for href in project_hrefs:
+            for href in tqdm(project_hrefs, desc="squeaktrunk", unit="proj"):
                 try:
                     result = self._extract_project_slug(href)
                     if result is None:

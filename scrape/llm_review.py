@@ -16,26 +16,70 @@ Usage:
     python -m scrape video-review [--limit N] [--model MODEL] [--since-id N] [--since-date DATE]
 """
 
+import base64
+import json
+import logging
 import re
 import time
-import logging
-import base64
+from typing import Any, Literal
+from urllib.parse import parse_qs, urlparse
+
+import anthropic
+import openai
 import requests
-import json
-from urllib.parse import urlparse, parse_qs
+from pydantic import BaseModel
+from sqlalchemy import or_, select
+from sqlalchemy.engine import Connection, RowMapping
+from tenacity import retry, retry_if_exception_type, stop_after_attempt, wait_random_exponential
+from tqdm import tqdm
+
 from . import config, db
-from .models import model_tier, is_upgrade
+from .models import is_upgrade
+from .schema import (
+    blocklist,
+    package_categories,
+    package_classes,
+    package_methods,
+    packages,
+    scrape_raw,
+    sites,
+    videos,
+)
 
 log = logging.getLogger(__name__)
 
 BATCH_SIZE = 20  # packages per LLM call
 
 
+class Verdict(BaseModel):
+    id: int
+    verdict: Literal["keep", "block", "video"]
+    reason: str | None = None
+
+
+class VerdictBatch(BaseModel):
+    results: list[Verdict]
+
+
+class VideoVerdict(BaseModel):
+    id: int
+    verdict: Literal["keep", "block", "package"]
+    reason: str | None = None
+
+
+class VideoVerdictBatch(BaseModel):
+    results: list[VideoVerdict]
+
+
 # Matches an 11-character YouTube video id in any common URL form.
 _YOUTUBE_ID_RE = re.compile(r"([A-Za-z0-9_-]{11})")
 
 
-def _extract_youtube_id(url):
+def _is_youtube_id(s: str) -> bool:
+    return bool(_YOUTUBE_ID_RE.fullmatch(s))
+
+
+def _extract_youtube_id(url: str | None) -> str | None:
     """Return the 11-char YouTube video id from a URL, or None.
 
     Handles youtube.com/watch?v=, youtu.be/, /embed/, /v/, /shorts/.
@@ -50,16 +94,16 @@ def _extract_youtube_id(url):
     path = parsed.path or ""
     if host in ("youtu.be",):
         candidate = path.lstrip("/").split("/", 1)[0]
-        if _YOUTUBE_ID_RE.fullmatch(candidate):
+        if _is_youtube_id(candidate):
             return candidate
     if "youtube.com" in host or "youtube-nocookie.com" in host:
         if path.startswith(("/embed/", "/v/", "/shorts/")):
             candidate = path.split("/", 2)[2].split("/", 1)[0]
-            if _YOUTUBE_ID_RE.fullmatch(candidate):
+            if _is_youtube_id(candidate):
                 return candidate
         qs = parse_qs(parsed.query)
         v = qs.get("v", [""])[0]
-        if _YOUTUBE_ID_RE.fullmatch(v):
+        if _is_youtube_id(v):
             return v
     return None
 
@@ -111,7 +155,7 @@ queue).  Only add "reason" for "block" or "video" verdicts.  Be concise.
 """
 
 
-def _github_session():
+def _github_session() -> requests.Session:
     session = requests.Session()
     session.headers.update({
         "Accept": "application/vnd.github+json",
@@ -123,19 +167,36 @@ def _github_session():
     return session
 
 
-def fetch_readmes(conn, limit=None):
-    """Fetch README excerpts from GitHub for packages missing them."""
-    cur = conn.cursor()
-    sql = """
-        SELECT p.id, p.external_id
-        FROM packages p JOIN sites s ON p.site_id = s.id
-        WHERE s.name = 'github' AND p.readme_excerpt IS NULL
-        ORDER BY p.stars DESC, p.id
+def _build_client() -> Any:
+    """Return an instructor-wrapped LLM client.
+
+    Uses the OpenAI SDK pointed at any OpenAI-compatible endpoint when
+    OPENAI_BASE_URL is set, otherwise the Anthropic SDK.
     """
+    import instructor
+
+    if config.OPENAI_BASE_URL:
+        from openai import OpenAI
+        return instructor.from_openai(
+            OpenAI(api_key=config.OPENAI_API_KEY, base_url=config.OPENAI_BASE_URL)
+        )
+    import anthropic
+    return instructor.from_anthropic(
+        anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+    )
+
+
+def fetch_readmes(conn: Connection, limit: int | None = None) -> int:
+    """Fetch README excerpts from GitHub for packages missing them."""
+    stmt = (
+        select(packages.c.id, packages.c.external_id)
+        .select_from(packages.join(sites, sites.c.id == packages.c.site_id))
+        .where(sites.c.name == "github", packages.c.readme_excerpt.is_(None))
+        .order_by(packages.c.stars.desc(), packages.c.id)
+    )
     if limit:
-        sql += f" LIMIT {int(limit)}"
-    cur.execute(sql)
-    rows = cur.fetchall()
+        stmt = stmt.limit(limit)
+    rows = conn.execute(stmt).mappings().fetchall()
     if not rows:
         log.info("No packages need README fetching")
         return 0
@@ -145,7 +206,7 @@ def fetch_readmes(conn, limit=None):
     fetched = 0
     errors = 0
 
-    for row in rows:
+    for row in tqdm(rows, desc="readmes", unit="pkg"):
         pkg_id = row["id"]
         full_name = row["external_id"]
         try:
@@ -169,9 +230,10 @@ def fetch_readmes(conn, limit=None):
 
             if resp.status_code == 404:
                 # No README — store empty string so we don't retry
-                cur.execute(
-                    "UPDATE packages SET readme_excerpt = '' WHERE id = %s",
-                    (pkg_id,),
+                conn.execute(
+                    packages.update()
+                    .where(packages.c.id == pkg_id)
+                    .values(readme_excerpt="")
                 )
                 conn.commit()
                 fetched += 1
@@ -190,27 +252,56 @@ def fetch_readmes(conn, limit=None):
 
             # Store first 10KB
             excerpt = content[:10000]
-            cur.execute(
-                "UPDATE packages SET readme_excerpt = %s WHERE id = %s",
-                (excerpt, pkg_id),
+            conn.execute(
+                packages.update()
+                .where(packages.c.id == pkg_id)
+                .values(readme_excerpt=excerpt)
             )
             conn.commit()
             fetched += 1
-
-            if fetched % 100 == 0:
-                log.info("Fetched %d/%d READMEs (%d errors)", fetched, len(rows), errors)
 
         except Exception as e:
             log.warning("Error fetching README for %s: %s", full_name, e)
             errors += 1
 
     log.info("README fetch done: fetched=%d errors=%d", fetched, errors)
-    cur.close()
     return fetched
 
 
-def _call_llm(client, packages, model):
-    """Send a batch of packages to the LLM for classification."""
+# Transient API errors worth retrying (both SDKs share the same hierarchy).
+# Deterministic errors (BadRequestError, auth, validation) are not retried.
+_TRANSIENT = (
+    anthropic.APIConnectionError, anthropic.APITimeoutError,
+    anthropic.RateLimitError, anthropic.InternalServerError,
+    openai.APIConnectionError, openai.APITimeoutError,
+    openai.RateLimitError, openai.InternalServerError,
+)
+
+
+@retry(
+    stop=stop_after_attempt(3),
+    wait=wait_random_exponential(multiplier=1, max=30),
+    retry=retry_if_exception_type(_TRANSIENT),
+    reraise=True,
+)
+def _call_llm(client: Any, items: list[dict], model: str,
+              prompt: str, response_model: type[BaseModel],
+              max_tokens: int) -> list[dict]:
+    """Send a batch of items to the LLM for classification."""
+    user_msg = json.dumps(items, indent=None)
+    resp = client.create(
+        model=model,
+        max_tokens=max_tokens,
+        messages=[
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": user_msg},
+        ],
+        response_model=response_model,
+    )
+    return [v.model_dump(exclude_none=True) for v in resp.results]
+
+
+def _package_items(packages: list[RowMapping]) -> list[dict]:
     items = []
     for p in packages:
         item = {
@@ -228,28 +319,27 @@ def _call_llm(client, packages, model):
         if readme:
             item["readme_start"] = readme
         items.append(item)
+    return items
 
-    user_msg = json.dumps(items, indent=None)
-    resp = client.messages.create(
-        model=model,
-        max_tokens=2048,
-        system=SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_msg}],
+
+def _delete_package(conn: Connection, pkg_id: int) -> None:
+    """Remove a package and its dependent rows, detaching scrape_raw."""
+    conn.execute(
+        scrape_raw.update()
+        .where(scrape_raw.c.package_id == pkg_id)
+        .values(package_id=None)
     )
-    text = resp.content[0].text.strip()
-    # Strip markdown code fences
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-    # Find the JSON array even if surrounded by prose
-    start = text.find("[")
-    end = text.rfind("]")
-    if start >= 0 and end > start:
-        text = text[start:end + 1]
-    return json.loads(text)
+    conn.execute(package_methods.delete().where(package_methods.c.package_id == pkg_id))
+    conn.execute(package_classes.delete().where(package_classes.c.package_id == pkg_id))
+    conn.execute(package_categories.delete().where(package_categories.c.package_id == pkg_id))
+    conn.execute(packages.delete().where(packages.c.id == pkg_id))
 
 
-def review_packages(conn, limit=None, model="claude-haiku-4-5-20251001",
-                    scope="unreviewed", since_id=None, since_date=None):
+def review_packages(conn: Connection, limit: int | None = None,
+                    model: str = config.OPENAI_MODEL,
+                    scope: Literal["all", "upgrade", "unreviewed"] = "unreviewed",
+                    since_id: int | None = None,
+                    since_date: str | None = None) -> dict[str, int]:
     """LLM-review packages.
 
     scope: "unreviewed" — only NULL llm_review
@@ -258,35 +348,31 @@ def review_packages(conn, limit=None, model="claude-haiku-4-5-20251001",
     since_id:   only review packages with id >= this value
     since_date: only review packages with created_at >= this value (str)
     """
-    cur = conn.cursor()
-    params = []
-    cols = """p.id, p.name, p.qualified_name, p.description, p.stars,
-                   p.dialect, p.topics, p.readme_excerpt, p.url, p.external_id,
-                   s.name as site_name, p.llm_review"""
-    base = f"SELECT {cols}\n            FROM packages p JOIN sites s ON p.site_id = s.id"
+    stmt = select(
+        packages.c.id, packages.c.name, packages.c.qualified_name,
+        packages.c.description, packages.c.stars, packages.c.dialect,
+        packages.c.topics, packages.c.readme_excerpt, packages.c.url,
+        packages.c.external_id, sites.c.name.label("site_name"),
+        packages.c.llm_review,
+    ).select_from(packages.join(sites, sites.c.id == packages.c.site_id))
 
     conditions = []
     if scope == "upgrade":
-        conditions.append("(p.llm_review IS NULL OR p.llm_review != %s)")
-        params.append(model)
+        conditions.append(or_(packages.c.llm_review.is_(None), packages.c.llm_review != model))
     elif scope != "all":  # unreviewed (also re-pick rows stranded as '<model>:error')
-        conditions.append("(p.llm_review IS NULL OR p.llm_review LIKE '%%:error')")
+        conditions.append(or_(packages.c.llm_review.is_(None), packages.c.llm_review.like("%:error")))
 
     if since_id is not None:
-        conditions.append("p.id >= %s")
-        params.append(since_id)
+        conditions.append(packages.c.id >= since_id)
     if since_date is not None:
-        conditions.append("p.created_at >= %s")
-        params.append(since_date)
+        conditions.append(packages.c.created_at >= since_date)
 
-    sql = base
     if conditions:
-        sql += "\n            WHERE " + " AND ".join(conditions)
-    sql += "\n            ORDER BY p.stars DESC, p.id"
+        stmt = stmt.where(*conditions)
+    stmt = stmt.order_by(packages.c.stars.desc(), packages.c.id)
     if limit:
-        sql += f" LIMIT {int(limit)}"
-    cur.execute(sql, params)
-    rows = cur.fetchall()
+        stmt = stmt.limit(limit)
+    rows = conn.execute(stmt).mappings().fetchall()
 
     # For upgrade scope, filter to rows actually reviewed by a lower tier
     if scope == "upgrade":
@@ -299,8 +385,7 @@ def review_packages(conn, limit=None, model="claude-haiku-4-5-20251001",
     # Build the client up front so a missing 'anthropic' module or bad
     # credentials fail loudly here, instead of being caught per-batch and
     # silently marking every package as ':error' (which never gets retried).
-    import anthropic
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+    client = _build_client()
 
     log.info("LLM reviewing %d packages with %s", len(rows), model)
 
@@ -311,10 +396,11 @@ def review_packages(conn, limit=None, model="claude-haiku-4-5-20251001",
 
     # Process in batches
     routed = 0
-    for i in range(0, len(rows), BATCH_SIZE):
+    for i in tqdm(range(0, len(rows), BATCH_SIZE), desc="llm-review", unit="batch"):
         batch = rows[i:i + BATCH_SIZE]
         try:
-            results = _call_llm(client, batch, model)
+            results = _call_llm(client, _package_items(batch), model,
+                                SYSTEM_PROMPT, VerdictBatch, 32768)
             for item in results:
                 pkg_id = item["id"]
                 verdict = item["verdict"]
@@ -331,25 +417,24 @@ def review_packages(conn, limit=None, model="claude-haiku-4-5-20251001",
                     video_id = _extract_youtube_id(pkg_url)
                     if video_id and pkg_row:
                         try:
-                            cur.execute(
-                                "INSERT IGNORE INTO videos "
-                                "(video_id, title, url, description, dialect, source) "
-                                "VALUES (%s, %s, %s, %s, %s, %s)",
-                                (video_id,
-                                 (pkg_row["name"] or "")[:500],
-                                 pkg_url,
-                                 (pkg_row["description"] or "")[:5000],
-                                 pkg_row["dialect"] or "unknown",
-                                 "package_review_routed"),
+                            conn.execute(
+                                db.insert_ignore(
+                                    videos,
+                                    {
+                                        "video_id": video_id,
+                                        "title": (pkg_row["name"] or "")[:500],
+                                        "url": pkg_url,
+                                        "description": (pkg_row["description"] or "")[:5000],
+                                        "dialect": pkg_row["dialect"] or "unknown",
+                                        "source": "package_review_routed",
+                                    },
+                                    ["video_id"],
+                                )
                             )
                         except Exception as e:
                             log.warning("Could not insert routed video %s: %s",
                                         video_id, e)
-                        cur.execute("UPDATE scrape_raw SET package_id=NULL WHERE package_id=%s", (pkg_id,))
-                        cur.execute("DELETE FROM package_methods WHERE package_id=%s", (pkg_id,))
-                        cur.execute("DELETE FROM package_classes WHERE package_id=%s", (pkg_id,))
-                        cur.execute("DELETE FROM package_categories WHERE package_id=%s", (pkg_id,))
-                        cur.execute("DELETE FROM packages WHERE id=%s", (pkg_id,))
+                        _delete_package(conn, pkg_id)
                         routed += 1
                         log.info("ROUTED to videos: %s (video_id=%s) — %s",
                                  (pkg_row["name"] or ext_id)[:80], video_id, reason)
@@ -364,46 +449,45 @@ def review_packages(conn, limit=None, model="claude-haiku-4-5-20251001",
                 if verdict == "block":
                     reason = item.get("reason", "LLM flagged as non-Smalltalk")
                     # Add to blocklist
-                    cur.execute(
-                        "INSERT IGNORE INTO blocklist (external_id, site_name, reason) "
-                        "VALUES (%s, %s, %s)",
-                        (ext_id, site_name, f"LLM: {reason}"[:500]),
+                    conn.execute(
+                        db.insert_ignore(
+                            blocklist,
+                            {
+                                "external_id": ext_id,
+                                "site_name": site_name,
+                                "reason": f"LLM: {reason}"[:500],
+                            },
+                            ["external_id", "site_name"],
+                        )
                     )
                     # Delete the package
-                    cur.execute("UPDATE scrape_raw SET package_id=NULL WHERE package_id=%s", (pkg_id,))
-                    cur.execute("DELETE FROM package_methods WHERE package_id=%s", (pkg_id,))
-                    cur.execute("DELETE FROM package_classes WHERE package_id=%s", (pkg_id,))
-                    cur.execute("DELETE FROM package_categories WHERE package_id=%s", (pkg_id,))
-                    cur.execute("DELETE FROM packages WHERE id=%s", (pkg_id,))
+                    _delete_package(conn, pkg_id)
                     blocked += 1
                     log.info("BLOCKED: %s — %s", ext_id, reason)
                 else:
-                    cur.execute(
-                        "UPDATE packages SET llm_review = %s WHERE id = %s",
-                        (model, pkg_id),
+                    conn.execute(
+                        packages.update()
+                        .where(packages.c.id == pkg_id)
+                        .values(llm_review=model)
                     )
                     kept += 1
             conn.commit()
             reviewed += len(batch)
-
-            if reviewed % 100 == 0:
-                log.info("Progress: reviewed=%d kept=%d blocked=%d routed=%d",
-                         reviewed, kept, blocked, routed)
 
         except Exception as e:
             log.error("LLM batch error at offset %d: %s", i, e)
             errors += 1
             # Mark batch as reviewed with error so we don't retry endlessly
             for row in batch:
-                cur.execute(
-                    "UPDATE packages SET llm_review = %s WHERE id = %s",
-                    (f"{model}:error", row["id"]),
+                conn.execute(
+                    packages.update()
+                    .where(packages.c.id == row["id"])
+                    .values(llm_review=f"{model}:error")
                 )
             conn.commit()
 
     log.info("LLM review done: reviewed=%d kept=%d blocked=%d routed=%d errors=%d",
              reviewed, kept, blocked, routed, errors)
-    cur.close()
     return {"reviewed": reviewed, "blocked": blocked, "kept": kept,
             "routed": routed, "errors": errors}
 
@@ -456,8 +540,7 @@ Only add "reason" for "block" or "package" verdicts.
 """
 
 
-def _call_video_llm(client, videos, model):
-    """Send a batch of videos to the LLM for classification."""
+def _video_items(videos: list[RowMapping]) -> list[dict]:
     items = []
     for v in videos:
         item = {
@@ -473,26 +556,14 @@ def _call_video_llm(client, videos, model):
         if desc:
             item["description"] = desc
         items.append(item)
-
-    user_msg = json.dumps(items, indent=None)
-    resp = client.messages.create(
-        model=model,
-        max_tokens=4096,
-        system=VIDEO_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": user_msg}],
-    )
-    text = resp.content[0].text.strip()
-    if text.startswith("```"):
-        text = text.split("\n", 1)[1].rsplit("```", 1)[0].strip()
-    start = text.find("[")
-    end = text.rfind("]")
-    if start >= 0 and end > start:
-        text = text[start:end + 1]
-    return json.loads(text)
+    return items
 
 
-def review_videos(conn, limit=None, model="claude-haiku-4-5-20251001",
-                  scope="unreviewed", since_id=None, since_date=None):
+def review_videos(conn: Connection, limit: int | None = None,
+                  model: str = config.OPENAI_MODEL,
+                  scope: Literal["all", "upgrade", "unreviewed"] = "unreviewed",
+                  since_id: int | None = None,
+                  since_date: str | None = None) -> dict[str, int]:
     """LLM-review videos.
 
     scope: "unreviewed" — only NULL llm_review
@@ -503,34 +574,29 @@ def review_videos(conn, limit=None, model="claude-haiku-4-5-20251001",
 
     Blocked videos are added to the blocklist and deleted.
     """
-    cur = conn.cursor()
-    params = []
-    cols = """id, video_id, title, description, url, channel_name,
-                   dialect, source, llm_review"""
-    base = f"SELECT {cols}\n            FROM videos"
+    stmt = select(
+        videos.c.id, videos.c.video_id, videos.c.title, videos.c.description,
+        videos.c.url, videos.c.channel_name, videos.c.dialect, videos.c.source,
+        videos.c.llm_review,
+    )
 
     conditions = []
     if scope == "upgrade":
-        conditions.append("(llm_review IS NULL OR llm_review != %s)")
-        params.append(model)
+        conditions.append(or_(videos.c.llm_review.is_(None), videos.c.llm_review != model))
     elif scope != "all":  # unreviewed (also re-pick rows stranded as '<model>:error')
-        conditions.append("(llm_review IS NULL OR llm_review LIKE '%%:error')")
+        conditions.append(or_(videos.c.llm_review.is_(None), videos.c.llm_review.like("%:error")))
 
     if since_id is not None:
-        conditions.append("id >= %s")
-        params.append(since_id)
+        conditions.append(videos.c.id >= since_id)
     if since_date is not None:
-        conditions.append("created_at >= %s")
-        params.append(since_date)
+        conditions.append(videos.c.created_at >= since_date)
 
-    sql = base
     if conditions:
-        sql += "\n            WHERE " + " AND ".join(conditions)
-    sql += "\n            ORDER BY id"
+        stmt = stmt.where(*conditions)
+    stmt = stmt.order_by(videos.c.id)
     if limit:
-        sql += f" LIMIT {int(limit)}"
-    cur.execute(sql, params)
-    rows = cur.fetchall()
+        stmt = stmt.limit(limit)
+    rows = conn.execute(stmt).mappings().fetchall()
 
     if scope == "upgrade":
         rows = [r for r in rows
@@ -542,8 +608,7 @@ def review_videos(conn, limit=None, model="claude-haiku-4-5-20251001",
     # Build the client up front so a missing 'anthropic' module or bad
     # credentials fail loudly here, instead of being caught per-batch and
     # silently marking every video as ':error' (which never gets retried).
-    import anthropic
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+    client = _build_client()
 
     log.info("LLM reviewing %d videos with %s", len(rows), model)
 
@@ -566,10 +631,11 @@ def review_videos(conn, limit=None, model="claude-haiku-4-5-20251001",
             )
         return routing_job_id, web_site_id
 
-    for i in range(0, len(rows), VIDEO_BATCH_SIZE):
+    for i in tqdm(range(0, len(rows), VIDEO_BATCH_SIZE), desc="video-review", unit="batch"):
         batch = rows[i:i + VIDEO_BATCH_SIZE]
         try:
-            results = _call_video_llm(client, batch, model)
+            results = _call_llm(client, _video_items(batch), model,
+                                VIDEO_SYSTEM_PROMPT, VideoVerdictBatch, 32768)
             for item in results:
                 vid_id = item["id"]
                 verdict = item["verdict"]
@@ -598,7 +664,7 @@ def review_videos(conn, limit=None, model="claude-haiku-4-5-20251001",
                         except Exception as e:
                             log.warning("Could not route video %s to packages: %s",
                                         vid_id, e)
-                        cur.execute("DELETE FROM videos WHERE id = %s", (vid_id,))
+                        conn.execute(videos.delete().where(videos.c.id == vid_id))
                         routed += 1
                         title = vid_row["title"] if vid_row else "?"
                         log.info("ROUTED to packages: %s — %s",
@@ -612,40 +678,43 @@ def review_videos(conn, limit=None, model="claude-haiku-4-5-20251001",
                     reason = item.get("reason", "LLM flagged as not Smalltalk")
                     video_id = vid_row["video_id"] if vid_row else str(vid_id)
                     # Add to blocklist so it doesn't come back on re-scrape
-                    cur.execute(
-                        "INSERT IGNORE INTO blocklist (external_id, site_name, reason) "
-                        "VALUES (%s, %s, %s)",
-                        (video_id, "youtube", f"LLM: {reason}"[:500]),
+                    conn.execute(
+                        db.insert_ignore(
+                            blocklist,
+                            {
+                                "external_id": video_id,
+                                "site_name": "youtube",
+                                "reason": f"LLM: {reason}"[:500],
+                            },
+                            ["external_id", "site_name"],
+                        )
                     )
-                    cur.execute("DELETE FROM videos WHERE id = %s", (vid_id,))
+                    conn.execute(videos.delete().where(videos.c.id == vid_id))
                     blocked += 1
                     title = vid_row["title"] if vid_row else "?"
                     log.info("BLOCKED video: %s — %s", title[:80], reason)
                 else:
-                    cur.execute(
-                        "UPDATE videos SET llm_review = %s WHERE id = %s",
-                        (model, vid_id),
+                    conn.execute(
+                        videos.update()
+                        .where(videos.c.id == vid_id)
+                        .values(llm_review=model)
                     )
                     kept += 1
             conn.commit()
             reviewed += len(batch)
 
-            if reviewed % 100 == 0:
-                log.info("Video progress: reviewed=%d kept=%d blocked=%d routed=%d",
-                         reviewed, kept, blocked, routed)
-
         except Exception as e:
             log.error("Video LLM batch error at offset %d: %s", i, e)
             errors += 1
             for row in batch:
-                cur.execute(
-                    "UPDATE videos SET llm_review = %s WHERE id = %s",
-                    (f"{model}:error", row["id"]),
+                conn.execute(
+                    videos.update()
+                    .where(videos.c.id == row["id"])
+                    .values(llm_review=f"{model}:error")
                 )
             conn.commit()
 
     log.info("Video review done: reviewed=%d kept=%d blocked=%d routed=%d errors=%d",
              reviewed, kept, blocked, routed, errors)
-    cur.close()
     return {"reviewed": reviewed, "blocked": blocked, "kept": kept,
             "routed": routed, "errors": errors}

@@ -7,12 +7,14 @@ Usage:
     python -m scrape youtube [--playlists-only]
 """
 
+import logging
 import re
 import time
-import json
-import logging
-import pymysql
+
+from tqdm import tqdm
+
 from . import config, db
+from .schema import videos
 
 log = logging.getLogger(__name__)
 
@@ -46,14 +48,14 @@ _PLAYLISTS = [
 
 # Map keywords in title/description to dialect
 _DIALECT_PATTERNS = [
-    (re.compile(r"\bpharo\b", re.I), "pharo"),
-    (re.compile(r"\bsqueak\b", re.I), "squeak"),
-    (re.compile(r"\bcuis\b", re.I), "cuis"),
-    (re.compile(r"\bgnu.?smalltalk\b", re.I), "gnu_smalltalk"),
-    (re.compile(r"\bgemstone\b", re.I), "gemstone"),
-    (re.compile(r"\bvisualworks\b", re.I), "visualworks"),
-    (re.compile(r"\bdolphin\b", re.I), "dolphin"),
-    (re.compile(r"\bva.?smalltalk\b|vast\b", re.I), "va_smalltalk"),
+    (re.compile(r"\bpharo\b", re.IGNORECASE), "pharo"),
+    (re.compile(r"\bsqueak\b", re.IGNORECASE), "squeak"),
+    (re.compile(r"\bcuis\b", re.IGNORECASE), "cuis"),
+    (re.compile(r"\bgnu.?smalltalk\b", re.IGNORECASE), "gnu_smalltalk"),
+    (re.compile(r"\bgemstone\b", re.IGNORECASE), "gemstone"),
+    (re.compile(r"\bvisualworks\b", re.IGNORECASE), "visualworks"),
+    (re.compile(r"\bdolphin\b", re.IGNORECASE), "dolphin"),
+    (re.compile(r"\bva.?smalltalk\b|vast\b", re.IGNORECASE), "va_smalltalk"),
 ]
 
 
@@ -231,27 +233,32 @@ class YouTubeScraper:
         """Insert or update a video row. Returns True if new."""
         if db.is_blocked(self.conn, "youtube", video_id):
             return False
-        with self.conn.cursor() as cur:
-            try:
-                cur.execute(
-                    "INSERT INTO videos "
-                    "(video_id, title, url, description, channel_name, channel_url, "
-                    "thumbnail_url, duration_seconds, published_at, view_count, "
-                    "dialect, source) "
-                    "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
-                    "ON DUPLICATE KEY UPDATE "
-                    "title=VALUES(title), description=VALUES(description), "
-                    "view_count=VALUES(view_count), thumbnail_url=VALUES(thumbnail_url)",
-                    (video_id, title[:500], url, (description or "")[:5000],
-                     channel_name or "", channel_url or "", thumbnail_url or "",
-                     duration_seconds, published_at, view_count,
-                     dialect, source),
+        try:
+            result = self.conn.execute(
+                db.upsert(
+                    videos,
+                    {
+                        "video_id": video_id,
+                        "title": title[:500],
+                        "url": url,
+                        "description": (description or "")[:5000],
+                        "channel_name": channel_name or "",
+                        "channel_url": channel_url or "",
+                        "thumbnail_url": thumbnail_url or "",
+                        "duration_seconds": duration_seconds,
+                        "published_at": published_at,
+                        "view_count": view_count,
+                        "dialect": dialect,
+                        "source": source,
+                    },
+                    ["video_id"],
                 )
-                self.conn.commit()
-                return cur.rowcount == 1  # 1 = insert, 2 = update
-            except pymysql.err.IntegrityError:
-                self.conn.rollback()
-                return False
+            )
+            self.conn.commit()
+            return result.rowcount == 1  # 1 = insert, 2 = update
+        except db.IntegrityError:
+            self.conn.rollback()
+            return False
 
     def _process_search_result(self, r, source="youtube"):
         """Extract fields from a SerpAPI YouTube search result and save."""
@@ -359,8 +366,8 @@ class YouTubeScraper:
 
         # 2. Search queries
         seen_ids = set()
-        for qi, query in enumerate(_VIDEO_QUERIES, 1):
-            log.info("YouTube search [%d/%d]: %s", qi, len(_VIDEO_QUERIES), query)
+        for query in (query_bar := tqdm(_VIDEO_QUERIES, desc="youtube", unit="query")):
+            log.info("YouTube search: %s", query)
             try:
                 results = self._serpapi_youtube_search(query, max_pages=3)
                 new = 0
@@ -373,11 +380,13 @@ class YouTubeScraper:
                     except Exception as e:
                         log.error("  video save failed: %s", e)
                         errors += 1
+                query_bar.set_postfix(saved=saved, errors=errors)
                 log.info("  results: %d found, %d new", len(results), new)
                 time.sleep(2)
             except Exception as e:
                 log.error("YouTube search %r failed: %s", query, e)
                 errors += 1
+                query_bar.set_postfix(saved=saved, errors=errors)
 
         log.info("YouTube done: found=%d saved=%d errors=%d", found, saved, errors)
         return {"found": found, "saved": saved, "errors": errors}

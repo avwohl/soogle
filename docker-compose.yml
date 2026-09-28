@@ -1,0 +1,13 @@
+services:
+
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    ports:
+      - "8000:8000"
+    environment:
+      SOOGLE_DB_ENGINE: sqlite
+      SOOGLE_DB_PATH: /data/soogle.db
+    volumes:
+      - ./data:/data

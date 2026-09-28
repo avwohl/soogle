@@ -13,6 +13,7 @@ import time
 import logging
 import requests
 from datetime import datetime, timedelta
+from tqdm import tqdm
 from . import config, db
 
 _ST_SIGNAL = re.compile(
@@ -212,7 +213,7 @@ class GitHubScraper:
 
                 found += len(repos)
 
-                for repo in repos:
+                for repo in tqdm(repos, desc=f"{seg_from:%Y-%m-%d}..{seg_to:%Y-%m-%d}", unit="repo"):
                     full_name = repo.get("full_name", "")
                     try:
                         # Fetch full repo details (search results omit some fields)

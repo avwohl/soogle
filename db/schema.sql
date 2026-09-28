@@ -154,6 +154,7 @@ CREATE TABLE packages (
     -- Scrape tracking
     last_scraped_at     TIMESTAMP NULL,
     scrape_checksum     CHAR(64) NULL,                     -- matches scrape_raw.raw_checksum
+    llm_review          VARCHAR(100) NULL,                 -- model that reviewed, NULL = unreviewed
 
     -- Row timestamps
     created_at          TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,

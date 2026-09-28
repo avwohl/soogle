@@ -38,7 +38,12 @@ def _load_env_file(path):
 # Load .env from the repo root.
 _load_env_file(Path(__file__).resolve().parent.parent / ".env")
 
-# MySQL
+# Database.  Engine is auto-detected: MySQL if SOOGLE_DB_PASS is set (the one
+# MySQL var with no default), otherwise SQLite.  SOOGLE_DB_ENGINE overrides.
+DB_ENGINE = os.environ.get("SOOGLE_DB_ENGINE") or (
+    "mysql" if os.environ.get("SOOGLE_DB_PASS") else "sqlite"
+)
+DB_PATH = os.environ.get("SOOGLE_DB_PATH", "soogle.db")
 DB_HOST = os.environ.get("SOOGLE_DB_HOST", "127.0.0.1")
 DB_PORT = int(os.environ.get("SOOGLE_DB_PORT", "3306"))
 DB_USER = os.environ.get("SOOGLE_DB_USER", "root")
@@ -46,14 +51,14 @@ DB_USER = os.environ.get("SOOGLE_DB_USER", "root")
 # the source. A missing value fails here rather than surfacing later as an
 # "Access denied for user" traceback from deep inside a scrape.
 DB_PASS = os.environ.get("SOOGLE_DB_PASS")
-if not DB_PASS:
+if DB_ENGINE == "mysql" and not DB_PASS:
     raise RuntimeError(
         "SOOGLE_DB_PASS is not set. Add it to the .env file in the repo root."
     )
 DB_NAME = os.environ.get("SOOGLE_DB_NAME", "soogle")
 
 # GitHub
-GITHUB_TOKEN = os.environ.get("GH_TOKEN", "")
+GITHUB_TOKEN = os.environ.get("GITHUB_TOKEN", "")
 GITHUB_API = "https://api.github.com"
 GITHUB_SEARCH_PER_PAGE = 100
 GITHUB_SEARCH_PAUSE = 2.5          # seconds between search requests (30/min limit)
@@ -79,6 +84,12 @@ BING_RESULTS_PER_QUERY = 20
 # LLM analysis (for site structure assessment)
 ANTHROPIC_API_KEY = os.environ.get("ANTHROPIC_API_KEY", "")
 ANALYZE_MODEL = "claude-sonnet-4-6"
+
+# LLM review backend. Set OPENAI_BASE_URL to any OpenAI-compatible endpoint
+# (vLLM, Ollama, LM Studio, OpenRouter, ...); leave empty to use Anthropic.
+OPENAI_API_KEY = os.environ.get("OPENAI_API_KEY", "")
+OPENAI_BASE_URL = os.environ.get("OPENAI_BASE_URL", "")
+OPENAI_MODEL = os.environ.get("OPENAI_MODEL", "claude-haiku-4-5-20251001")
 
 # Processing
 PROCESS_BATCH_SIZE = 100

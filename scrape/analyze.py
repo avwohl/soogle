@@ -11,14 +11,18 @@ Usage:
 
 import json
 import logging
-import os
 import time
-from urllib.parse import urlparse, urljoin
+from typing import Any
+from urllib.parse import urlparse
 
 import requests
 from bs4 import BeautifulSoup
+from pydantic import BaseModel
+from sqlalchemy import func, select
+from tqdm import tqdm
 
 from . import config, db
+from .schema import scrape_raw, site_analyses
 
 log = logging.getLogger(__name__)
 
@@ -134,13 +138,13 @@ def _get_discovered_domains(conn, min_urls=2):
     Tracks all URLs per domain so we can compute the common subtree prefix.
     """
     site_id = db.get_site_id(conn, "web_discovered")
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT external_id, raw_metadata FROM scrape_raw "
-            "WHERE site_id = %s AND status IN ('pending', 'processed')",
-            (site_id,),
+    rows = conn.execute(
+        select(scrape_raw.c.external_id, scrape_raw.c.raw_metadata)
+        .where(
+            scrape_raw.c.site_id == site_id,
+            scrape_raw.c.status.in_(["pending", "processed"]),
         )
-        rows = cur.fetchall()
+    ).mappings().fetchall()
 
     domains = {}
     for row in rows:
@@ -161,9 +165,7 @@ def _get_discovered_domains(conn, min_urls=2):
         del info["all_urls"]  # don't carry the full list forward
 
     # Filter to domains with enough hits and not already analyzed
-    with conn.cursor() as cur:
-        cur.execute("SELECT domain FROM site_analyses")
-        already = {r["domain"] for r in cur.fetchall()}
+    already = {r["domain"] for r in conn.execute(select(site_analyses.c.domain)).mappings().fetchall()}
 
     return {
         d: info for d, info in domains.items()
@@ -220,8 +222,35 @@ def _probe_site(session, domain, prefix="/"):
     }
 
 
+class SiteAnalysis(BaseModel):
+    structured_score: int
+    has_sitemap: bool
+    features: list[str]
+    recommended_approach: str
+    key_urls: list[str]
+
+
+def _build_client() -> Any:
+    """Return an instructor-wrapped LLM client.
+
+    Uses the OpenAI SDK pointed at any OpenAI-compatible endpoint when
+    OPENAI_BASE_URL is set, otherwise the Anthropic SDK.
+    """
+    import instructor
+
+    if config.OPENAI_BASE_URL:
+        from openai import OpenAI
+        return instructor.from_openai(
+            OpenAI(api_key=config.OPENAI_API_KEY, base_url=config.OPENAI_BASE_URL)
+        )
+    import anthropic
+    return instructor.from_anthropic(
+        anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+    )
+
+
 def _ask_llm(client, domain, sample_urls, probe):
-    """Send site info to Claude and get structured assessment."""
+    """Send site info to the LLM and get a structured assessment."""
     user_parts = [f"Domain: {domain}"]
 
     prefix = probe.get("prefix", "/")
@@ -258,63 +287,50 @@ def _ask_llm(client, domain, sample_urls, probe):
         user_parts.append(probe["robots"][:5000])
         user_parts.append("")
 
-    message = client.messages.create(
-        model=config.ANALYZE_MODEL,
-        max_tokens=1024,
-        system=_SYSTEM_PROMPT,
-        messages=[{"role": "user", "content": "\n".join(user_parts)}],
-    )
-
-    text = message.content[0].text
+    model = config.OPENAI_MODEL if config.OPENAI_BASE_URL else config.ANALYZE_MODEL
     try:
-        return json.loads(text)
-    except json.JSONDecodeError:
-        # Try to extract JSON from the response
-        import re
-        m = re.search(r"\{.*\}", text, re.DOTALL)
-        if m:
-            return json.loads(m.group())
-        log.warning("Could not parse LLM response for %s: %s", domain, text[:200])
+        resp = client.create(
+            model=model,
+            max_tokens=32768,
+            messages=[
+                {"role": "system", "content": _SYSTEM_PROMPT},
+                {"role": "user", "content": "\n".join(user_parts)},
+            ],
+            response_model=SiteAnalysis,
+        )
+    except Exception as e:
+        log.warning("LLM analysis failed for %s: %s", domain, e)
         return None
+    return resp.model_dump()
 
 
 def _save_analysis(conn, domain, urls_found, sample_urls, root_title, result):
     """Save LLM analysis to site_analyses table."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "INSERT INTO site_analyses "
-            "(domain, urls_found, sample_urls, root_page_title, has_sitemap, "
-            " structured_score, recommendation, llm_model) "
-            "VALUES (%s, %s, %s, %s, %s, %s, %s, %s) "
-            "ON DUPLICATE KEY UPDATE "
-            "urls_found = VALUES(urls_found), "
-            "sample_urls = VALUES(sample_urls), "
-            "root_page_title = VALUES(root_page_title), "
-            "has_sitemap = VALUES(has_sitemap), "
-            "structured_score = VALUES(structured_score), "
-            "recommendation = VALUES(recommendation), "
-            "llm_model = VALUES(llm_model), "
-            "analyzed_at = NOW()",
-            (
-                domain,
-                urls_found,
-                json.dumps(sample_urls),
-                root_title,
-                result.get("has_sitemap", False),
-                result.get("structured_score", 0),
-                json.dumps(result, indent=2),
-                config.ANALYZE_MODEL,
-            ),
+    conn.execute(
+        db.upsert(
+            site_analyses,
+            {
+                "domain": domain,
+                "urls_found": urls_found,
+                "sample_urls": json.dumps(sample_urls),
+                "root_page_title": root_title,
+                "has_sitemap": result.get("has_sitemap", False),
+                "structured_score": result.get("structured_score", 0),
+                "recommendation": json.dumps(result, indent=2),
+                "llm_model": config.OPENAI_MODEL if config.OPENAI_BASE_URL else config.ANALYZE_MODEL,
+                "analyzed_at": func.now(),
+            },
+            ["domain"],
         )
-        conn.commit()
+    )
+    conn.commit()
 
 
 def analyze_domains(conn, limit=None, min_urls=2):
     """Analyze discovered domains for structured scraping potential."""
-    if not config.ANTHROPIC_API_KEY:
+    if not config.ANTHROPIC_API_KEY and not config.OPENAI_BASE_URL:
         raise RuntimeError(
-            "analyze requires ANTHROPIC_API_KEY to be set.  "
-            "Export it:  export ANTHROPIC_API_KEY=your-key-here"
+            "analyze requires ANTHROPIC_API_KEY or OPENAI_BASE_URL to be set."
         )
 
     domains = _get_discovered_domains(conn, min_urls=min_urls)
@@ -329,10 +345,9 @@ def analyze_domains(conn, limit=None, min_urls=2):
 
     log.info("Analyzing %d discovered domains", len(sorted_domains))
 
-    # Build the client up front so a missing 'anthropic' module or bad
-    # credentials fail loudly here instead of being swallowed per-domain.
-    import anthropic
-    client = anthropic.Anthropic(api_key=config.ANTHROPIC_API_KEY)
+    # Build the client up front so a missing SDK module or bad credentials
+    # fail loudly here instead of being swallowed per-domain.
+    client = _build_client()
 
     session = requests.Session()
     session.headers.update({"User-Agent": config.USER_AGENT})
@@ -341,7 +356,7 @@ def analyze_domains(conn, limit=None, min_urls=2):
     promising = 0
     errors = 0
 
-    for domain, info in sorted_domains:
+    for domain, info in tqdm(sorted_domains, desc="analyze", unit="domain"):
         prefix = info.get("prefix", "/")
         prefix_msg = f" prefix={prefix}" if prefix != "/" else ""
         log.info("Analyzing %s (%d URLs found%s) ...", domain, info["count"], prefix_msg)
@@ -379,15 +394,16 @@ def analyze_domains(conn, limit=None, min_urls=2):
 
 def show_results(conn, min_score=0):
     """Print analysis results."""
-    with conn.cursor() as cur:
-        cur.execute(
-            "SELECT domain, urls_found, root_page_title, has_sitemap, "
-            "structured_score, recommendation, analyzed_at "
-            "FROM site_analyses WHERE structured_score >= %s "
-            "ORDER BY structured_score DESC",
-            (min_score,),
+    rows = conn.execute(
+        select(
+            site_analyses.c.domain, site_analyses.c.urls_found,
+            site_analyses.c.root_page_title, site_analyses.c.has_sitemap,
+            site_analyses.c.structured_score, site_analyses.c.recommendation,
+            site_analyses.c.analyzed_at,
         )
-        rows = cur.fetchall()
+        .where(site_analyses.c.structured_score >= min_score)
+        .order_by(site_analyses.c.structured_score.desc())
+    ).mappings().fetchall()
 
     if not rows:
         print("No analyzed domains" + (f" with score >= {min_score}" if min_score else ""))
@@ -399,7 +415,7 @@ def show_results(conn, min_score=0):
         if r['root_page_title']:
             print(f"  title: {r['root_page_title']}")
         if r['has_sitemap']:
-            print(f"  has sitemap.xml")
+            print("  has sitemap.xml")
 
         rec = r["recommendation"]
         if rec:

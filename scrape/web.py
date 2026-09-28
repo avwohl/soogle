@@ -25,6 +25,7 @@ import logging
 import warnings
 import requests
 from bs4 import BeautifulSoup, XMLParsedAsHTMLWarning
+from tqdm import tqdm
 
 warnings.filterwarnings("ignore", category=XMLParsedAsHTMLWarning)
 from urllib.parse import urljoin, urlparse
@@ -166,34 +167,38 @@ class SqueakSourceScraper(BaseScraper):
                 raise RuntimeError("Could not navigate to SqueakSource projects page")
 
             page_num = 0
-            while True:
-                page_num += 1
-                project_hrefs, next_url = self._parse_listing_page(listing)
-                if not project_hrefs:
-                    break
+            with tqdm(desc="squeaksource", unit="page", total=None) as pages_bar:
+                while True:
+                    page_num += 1
+                    pages_bar.set_description(f"squeaksource page {page_num}")
+                    project_hrefs, next_url = self._parse_listing_page(listing)
+                    if not project_hrefs:
+                        break
 
-                found += len(project_hrefs)
-                log.info("SqueakSource page %d: %d projects (total found=%d)",
-                         page_num, len(project_hrefs), found)
+                    found += len(project_hrefs)
+                    log.info("SqueakSource page %d: %d projects (total found=%d)",
+                             page_num, len(project_hrefs), found)
 
-                for href in project_hrefs:
-                    try:
-                        result = self._scrape_project_detail(href)
-                        if result is None:
-                            continue
-                        slug, meta = result
-                        row_id = db.insert_scrape_raw(
-                            self.conn, job_id, self.site_id, slug, meta,
-                        )
-                        if row_id:
-                            saved += 1
-                    except Exception as e:
-                        log.error("SqueakSource project failed: %s", e)
-                        errors += 1
+                    for href in (proj_bar := tqdm(project_hrefs, desc=f"page {page_num}", unit="proj", leave=False)):
+                        try:
+                            result = self._scrape_project_detail(href)
+                            if result is None:
+                                continue
+                            slug, meta = result
+                            row_id = db.insert_scrape_raw(
+                                self.conn, job_id, self.site_id, slug, meta,
+                            )
+                            if row_id:
+                                saved += 1
+                        except Exception as e:
+                            log.error("SqueakSource project failed: %s", e)
+                            errors += 1
+                        proj_bar.set_postfix(saved=saved, errors=errors)
 
-                if not next_url:
-                    break
-                listing = self.soup(next_url)
+                    pages_bar.update(1)
+                    if not next_url:
+                        break
+                    listing = self.soup(next_url)
 
         except Exception as e:
             log.exception("SqueakSource scrape failed")
@@ -378,7 +383,7 @@ class RosettaCodeScraper(BaseScraper):
             found = len(pages)
             log.info("Found %d Rosetta Code pages with Smalltalk", found)
 
-            for i, page in enumerate(pages):
+            for page in tqdm(pages, desc="rosettacode", unit="page"):
                 title = page.get("title", "")
                 if not title:
                     continue
@@ -401,9 +406,6 @@ class RosettaCodeScraper(BaseScraper):
                     )
                     if row_id:
                         saved += 1
-
-                    if (i + 1) % 50 == 0:
-                        log.info("Rosetta Code progress: %d/%d saved=%d", i + 1, found, saved)
                 except Exception as e:
                     log.error("Rosetta Code page %s failed: %s", title, e)
                     errors += 1
@@ -497,7 +499,7 @@ class VSKBScraper(BaseScraper):
             found = len(items)
             log.info("Found %d items in VS-KB source code library", found)
 
-            for item in items:
+            for item in tqdm(items, desc="vskb", unit="item"):
                 try:
                     if item["type"] == "page":
                         meta = self._scrape_code_page(item["url"], item["name"])
@@ -938,9 +940,8 @@ class DiscoveryScraper(BaseScraper):
                 log.info("Video-only mode: %d of %d queries match",
                          len(queries), len(_DISCOVERY_QUERIES))
 
-            for qi, query in enumerate(queries, 1):
-                log.info("Discovery search [%d/%d]: %s",
-                         qi, len(queries), query)
+            for query in tqdm(queries, desc="discover", unit="query"):
+                log.info("Discovery search: %s", query)
                 time.sleep(2)
                 urls = self._search(query)
                 total = len(urls)
@@ -949,12 +950,8 @@ class DiscoveryScraper(BaseScraper):
                 log.info("  results: %d total, %d duplicate/known, %d new",
                          total, known, new)
 
-                for ui, url in enumerate(urls, 1):
+                for url in tqdm(urls, desc=f"discover:{query[:30]}", unit="url", leave=False):
                     _process_top_url(url)
-
-                    if ui % 10 == 0:
-                        log.info("  progress: %d/%d URLs, saved=%d",
-                                 ui, len(urls), saved)
 
         except Exception as e:
             log.exception("Web discovery failed")

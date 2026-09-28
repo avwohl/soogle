@@ -47,7 +47,7 @@ Each scraper fetches metadata from its source and writes rows into the `scrape_r
 
 ### 2. Process — normalize into packages
 
-`python -m scrape process` reads pending rows from `scrape_raw` and for each one:
+`uv run python -m scrape process` reads pending rows from `scrape_raw` and for each one:
 
 - Detects the Smalltalk **dialect** from GitHub topics and name/description keywords (pharo, squeak, cuis, etc.) with a confidence score
 - **Auto-categorizes** into one or more of 19 categories (web, database, testing, ui/graphics, etc.) via keyword matching
@@ -56,7 +56,7 @@ Each scraper fetches metadata from its source and writes rows into the `scrape_r
 
 ### 3. LLM review — filter false positives
 
-`python -m scrape llm-review` sends batches of packages to Claude for quality review. The LLM catches false positives that regex alone misses:
+`uv run python -m scrape llm-review` sends batches of packages to Claude for quality review. The LLM catches false positives that regex alone misses:
 
 - C# / .NET projects (GitHub's linguist confuses `.cs` changesets with Smalltalk)
 - IEC 61131-3 Structured Text / PLC code (`.st` extension overlap)
@@ -65,13 +65,13 @@ Each scraper fetches metadata from its source and writes rows into the `scrape_r
 
 Packages marked "block" are added to a blocklist and deleted. Packages marked "keep" are stamped with the model name that reviewed them.
 
-`python -m scrape video-review` does the same for videos — blocks conversation-skills videos, design-pattern talks that only mention Smalltalk in passing, GemStone jewelry content, and spam.
+`uv run python -m scrape video-review` does the same for videos — blocks conversation-skills videos, design-pattern talks that only mention Smalltalk in passing, GemStone jewelry content, and spam.
 
 Both commands support a **model tier system** (haiku < sonnet < opus). The `--scope upgrade` flag re-reviews items that were previously reviewed by a lower-tier model, so you can upgrade quality without reprocessing everything.
 
 ### 4. Serve — Django web frontend
 
-The Django app reads directly from the MySQL database:
+The Django app reads directly from the database (MySQL or SQLite):
 
 - **Home page** — package count, video count, dialect breakdown, recently added packages
 - **Search** — full-text search with filters for dialect, source site, and category; sort by relevance, stars, update date, or name
@@ -79,6 +79,59 @@ The Django app reads directly from the MySQL database:
 - **Videos** — searchable gallery with dialect filter, sort by views or date
 - **Sources** — lists all indexed sites with package counts
 - **Submit** — users can submit new Smalltalk URLs for indexing
+
+### 5. MCP server
+
+A standalone MCP server (`mcp_server/`) exposes the same search service to AI
+agents. It reads the same database directly — no HTTP, no Django dependency.
+The `mcp` SDK lives in its own uv dependency group, so `uv sync` alone doesn't
+pull it in; install with `uv sync --group mcp`. Tools:
+
+- `search_packages` — search with dialect/site/category filters and sorting
+- `get_package` — package detail with categories, classes, and method list
+- `get_method` — a single method's source code
+- `list_sources` — active sites with package counts
+- `search_videos` — video search with dialect filter and sorting
+
+Run it locally over stdio (`mise run mcp`) and register it in your MCP client
+(e.g. Claude Code, opencode):
+
+```json
+{
+  "mcpServers": {
+    "soogle": {
+      "command": "uv",
+      "args": ["run", "--group", "mcp", "python", "-m", "mcp_server"],
+      "cwd": "/path/to/soogle"
+    }
+  }
+}
+```
+
+Or run it in a container:
+
+```bash
+docker compose up -d --build   # serves the site and /mcp on :8000
+```
+
+The compose mounts `./data` as the SQLite database directory. For MySQL,
+override the `SOOGLE_DB_*` environment variables instead. The `Dockerfile`
+builds the Django app under uvicorn (ASGI), which serves both the site and
+the `/mcp` endpoint.
+
+### Serving /mcp from Django
+
+Django can also serve the MCP endpoint itself at `/mcp`, by wrapping the MCP
+Starlette app in the ASGI application (`web/soogle_web/asgi.py`). This
+requires running Django under an ASGI server (uvicorn/gunicorn) instead of
+mod_wsgi, and the `mcp` uv group:
+
+```bash
+uv run --group mcp uvicorn soogle_web.asgi:application --port 8000
+```
+
+The MCP app's lifespan (its session manager) is run from Django's own
+lifespan handler, since uvicorn only runs the top-level app's lifespan.
 
 ## Daily and weekly updates
 
@@ -107,10 +160,12 @@ Runs paid-API scrapers (SerpAPI free tier: ~100 searches/month), then calls `dai
 
 ```
 soogle/
+  mise.toml               Dev tools (uv, ruff, prek) + task runner
   daily.bash              Daily cron script (free scrapers + processing)
   weekly.bash             Weekly cron script (paid APIs + daily.bash)
-  requirements.txt        requests, pymysql, beautifulsoup4
-  db/schema.sql           Full database schema and seed data
+   pyproject.toml        dependencies (requests, pymysql, beautifulsoup4, anthropic, django)
+  db/schema.sql           Full MySQL schema and seed data
+   db/schema.sqlite.sql    SQLite schema and seed data
   scrape/
     __main__.py           CLI entry point (python -m scrape <command>)
     config.py             DB connection, API keys, rate limits
@@ -131,34 +186,53 @@ soogle/
       views.py            View handlers (search, detail, videos, sources, SEO)
       urls.py             URL routing
       templates/search/   HTML templates (base, index, results, detail, videos, etc.)
+  mcp_server/             MCP server (stdio) exposing the same search service
   www/                    Static files (CSS, images)
 ```
 
 ## CLI reference
 
 ```
-python -m scrape github [--incremental | --since YYYY-MM-DD]
-python -m scrape web <source>                    # squeaksource | smalltalkhub | rosettacode | vskb | all
-python -m scrape custom <source>                 # squeakmap | lukas_renggli | sourceforge | launchpad | all
-python -m scrape youtube [--playlists-only]
-python -m scrape discover <engine>               # brave | serpapi | bing | ddg
-python -m scrape process [--limit N]
-python -m scrape analyze [--limit N] [--show] [--min-score 50]
-python -m scrape llm-review [--model M] [--scope S] [--limit N] [--fetch-only] [--review-only]
-python -m scrape video-review [--model M] [--scope S] [--limit N]
-python -m scrape block <external_id> [--site github] [--reason '...']
-python -m scrape status
+uv run python -m scrape github [--incremental | --since YYYY-MM-DD]
+uv run python -m scrape web <source>                    # squeaksource | smalltalkhub | rosettacode | vskb | all
+uv run python -m scrape custom <source>                 # squeakmap | lukas_renggli | sourceforge | launchpad | all
+uv run python -m scrape youtube [--playlists-only]
+uv run python -m scrape discover <engine>               # brave | serpapi | bing | ddg
+uv run python -m scrape process [--limit N]
+uv run python -m scrape analyze [--limit N] [--show] [--min-score 50]
+uv run python -m scrape llm-review [--model M] [--scope S] [--limit N] [--fetch-only] [--review-only]
+uv run python -m scrape video-review [--model M] [--scope S] [--limit N]
+uv run python -m scrape block <external_id> [--site github] [--reason '...']
+uv run python -m scrape status
 ```
 
 ## Requirements
 
+- [mise](https://mise.jdx.dev) — dev tools (uv, ruff, prek) and task runner
 - Python 3.10+
-- MySQL / MariaDB
-- `pip install -r requirements.txt` (requests, pymysql, beautifulsoup4)
+- MySQL / MariaDB **or** SQLite (see below)
+- `mise install` (installs uv, ruff, prek + git hooks)
+
+### Database: MySQL or SQLite
+
+The engine is auto-detected: if `SOOGLE_DB_PASS` is set, the pipeline and web
+app use MySQL; otherwise they use a local SQLite file — no server, no
+password.  Force one explicitly with `SOOGLE_DB_ENGINE=mysql|sqlite`.
+
+For SQLite, apply the schema once:
+
+```bash
+sqlite3 soogle.db < db/schema.sqlite.sql
+```
+
+The scrapers' SQL is translated to SQLite at the cursor (`scrape/db.py`), so
+the same code runs against both backends.
 
 Environment variables:
 
-- `SOOGLE_DB_PASS` — MySQL password
+- `SOOGLE_DB_ENGINE` — `mysql` or `sqlite` (optional; auto-detected)
+- `SOOGLE_DB_PATH` — SQLite database file (default `soogle.db`)
+- `SOOGLE_DB_PASS` — MySQL password; its presence selects MySQL
 - `GITHUB_TOKEN` — GitHub API token (required for github scraper)
 - `SERPAPI_KEY` — SerpAPI key (required for weekly.bash: discovery + youtube)
 - `ANTHROPIC_API_KEY` — Anthropic API key (required for LLM review, analyze)
@@ -166,6 +240,10 @@ Environment variables:
 ## Running
 
 ```bash
+# Install dependencies and git hooks
+mise install
+mise run install        # uv sync
+
 # Run the daily pipeline
 ./daily.bash
 
@@ -173,13 +251,20 @@ Environment variables:
 ./weekly.bash
 
 # Run individual commands
-python -m scrape github --incremental
-python -m scrape process
-python -m scrape llm-review --model claude-haiku-4-5-20251001 --scope unreviewed
+uv run python -m scrape github --incremental
+uv run python -m scrape process
+uv run python -m scrape llm-review --model claude-haiku-4-5-20251001 --scope unreviewed
 
 # Run the web server
-cd web
-python manage.py runserver
+mise run server         # uv run python web/manage.py runserver
+
+# Run the MCP server (stdio)
+mise run mcp            # uv run --group mcp python -m mcp_server
+
+# Tests and lint
+mise run test
+mise run lint
+mise run hooks          # prek run (all git hooks)
 ```
 
 ## Related

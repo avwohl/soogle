@@ -15,11 +15,25 @@ Usage:
     python -m scrape status
 """
 
-import sys
 import argparse
 import logging
+import sys
 from datetime import datetime
-from . import db
+
+from sqlalchemy import func, select
+
+from . import config, db
+from .schema import (
+    blocklist,
+    package_categories,
+    package_classes,
+    package_methods,
+    packages,
+    scrape_jobs,
+    scrape_raw,
+    sites,
+    videos,
+)
 
 logging.basicConfig(
     level=logging.INFO,
@@ -162,86 +176,98 @@ def cmd_video_review(args):
 
 def cmd_block(args):
     with db.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "INSERT IGNORE INTO blocklist (external_id, site_name, reason) "
-                "VALUES (%s, %s, %s)",
-                (args.external_id, args.site, args.reason),
+        result = conn.execute(
+            db.insert_ignore(
+                blocklist,
+                {
+                    "external_id": args.external_id,
+                    "site_name": args.site,
+                    "reason": args.reason,
+                },
+                ["external_id", "site_name"],
             )
-            if cur.rowcount:
-                conn.commit()
-                print(f"Blocked: {args.site}/{args.external_id}")
-            else:
-                print(f"Already blocked: {args.site}/{args.external_id}")
+        )
+        if result.rowcount:
+            conn.commit()
+            print(f"Blocked: {args.site}/{args.external_id}")
+        else:
+            print(f"Already blocked: {args.site}/{args.external_id}")
 
-            # Also delete the package if it exists
-            cur.execute(
-                "SELECT p.id FROM packages p JOIN sites s ON p.site_id = s.id "
-                "WHERE s.name = %s AND p.external_id = %s",
-                (args.site, args.external_id),
+        # Also delete the package if it exists
+        row = conn.execute(
+            select(packages.c.id)
+            .select_from(packages.join(sites, sites.c.id == packages.c.site_id))
+            .where(sites.c.name == args.site, packages.c.external_id == args.external_id)
+        ).mappings().fetchone()
+        if row:
+            pkg_id = row["id"]
+            conn.execute(
+                scrape_raw.update()
+                .where(scrape_raw.c.package_id == pkg_id)
+                .values(package_id=None)
             )
-            row = cur.fetchone()
-            if row:
-                pkg_id = row["id"]
-                cur.execute("UPDATE scrape_raw SET package_id=NULL WHERE package_id=%s", (pkg_id,))
-                cur.execute("DELETE FROM package_methods WHERE package_id=%s", (pkg_id,))
-                cur.execute("DELETE FROM package_classes WHERE package_id=%s", (pkg_id,))
-                cur.execute("DELETE FROM package_categories WHERE package_id=%s", (pkg_id,))
-                cur.execute("DELETE FROM packages WHERE id=%s", (pkg_id,))
-                conn.commit()
-                print(f"Deleted package id={pkg_id}")
+            conn.execute(package_methods.delete().where(package_methods.c.package_id == pkg_id))
+            conn.execute(package_classes.delete().where(package_classes.c.package_id == pkg_id))
+            conn.execute(package_categories.delete().where(package_categories.c.package_id == pkg_id))
+            conn.execute(packages.delete().where(packages.c.id == pkg_id))
+            conn.commit()
+            print(f"Deleted package id={pkg_id}")
 
 
 def cmd_status(args):
     with db.connection() as conn:
-        with conn.cursor() as cur:
-            cur.execute("SELECT COUNT(*) AS n FROM packages")
-            pkg_count = cur.fetchone()["n"]
+        pkg_count = conn.execute(select(func.count()).select_from(packages)).scalar()
 
-            cur.execute(
-                "SELECT status, COUNT(*) AS n FROM scrape_raw GROUP BY status ORDER BY status"
+        raw_counts = conn.execute(
+            select(scrape_raw.c.status, func.count().label("n"))
+            .group_by(scrape_raw.c.status)
+            .order_by(scrape_raw.c.status)
+        ).mappings().fetchall()
+
+        jobs = conn.execute(
+            select(
+                sites.c.name, scrape_jobs.c.job_type, scrape_jobs.c.status,
+                scrape_jobs.c.items_found, scrape_jobs.c.items_processed,
+                scrape_jobs.c.items_failed, scrape_jobs.c.started_at,
+                scrape_jobs.c.completed_at,
             )
-            raw_counts = cur.fetchall()
+            .select_from(scrape_jobs.join(sites, sites.c.id == scrape_jobs.c.site_id))
+            .order_by(scrape_jobs.c.id.desc())
+            .limit(10)
+        ).mappings().fetchall()
 
-            cur.execute(
-                "SELECT s.name, j.job_type, j.status, j.items_found, j.items_processed, "
-                "j.items_failed, j.started_at, j.completed_at "
-                "FROM scrape_jobs j JOIN sites s ON s.id = j.site_id "
-                "ORDER BY j.id DESC LIMIT 10"
-            )
-            jobs = cur.fetchall()
+        dialects = conn.execute(
+            select(packages.c.dialect, func.count().label("n"))
+            .group_by(packages.c.dialect)
+            .order_by(func.count().desc())
+        ).mappings().fetchall()
 
-            cur.execute(
-                "SELECT dialect, COUNT(*) AS n FROM packages GROUP BY dialect ORDER BY n DESC"
-            )
-            dialects = cur.fetchall()
+        video_count = conn.execute(select(func.count()).select_from(videos)).scalar()
 
-            cur.execute("SELECT COUNT(*) AS n FROM videos")
-            video_count = cur.fetchone()["n"]
-
-            cur.execute(
-                "SELECT source, COUNT(*) AS n FROM videos GROUP BY source ORDER BY n DESC"
-            )
-            video_sources = cur.fetchall()
+        video_sources = conn.execute(
+            select(videos.c.source, func.count().label("n"))
+            .group_by(videos.c.source)
+            .order_by(func.count().desc())
+        ).mappings().fetchall()
 
     print(f"\nPackages: {pkg_count}")
     print(f"Videos: {video_count}")
     if video_sources:
-        print(f"\nVideos by source:")
+        print("\nVideos by source:")
         for row in video_sources:
             print(f"  {row['source']}\t{row['n']}")
 
-    print(f"\nscrape_raw pipeline:")
+    print("\nscrape_raw pipeline:")
     for row in raw_counts:
         print(f"  {row['status']}\t{row['n']}")
 
     if dialects:
-        print(f"\nPackages by dialect:")
+        print("\nPackages by dialect:")
         for row in dialects:
             print(f"  {row['dialect']}\t{row['n']}")
 
     if jobs:
-        print(f"\nRecent scrape jobs:")
+        print("\nRecent scrape jobs:")
         for j in jobs:
             print(
                 f"  {j['name']}\t{j['job_type']}\t{j['status']}\t"
@@ -299,8 +325,8 @@ def main():
     llm.add_argument("--limit", type=int, default=None, help="Max packages to review")
     llm.add_argument("--fetch-only", action="store_true", help="Only fetch READMEs, skip LLM")
     llm.add_argument("--review-only", action="store_true", help="Skip README fetch, LLM only")
-    llm.add_argument("--model", default="claude-haiku-4-5-20251001",
-                     help="Anthropic model to use (default: claude-haiku-4-5-20251001)")
+    llm.add_argument("--model", default=config.OPENAI_MODEL,
+                     help="Model to use (default: %(default)s)")
     llm.add_argument("--scope", choices=["unreviewed", "upgrade", "all"],
                      default="unreviewed",
                      help="unreviewed=new only, upgrade=re-review items from a lower model, all=everything")
@@ -311,8 +337,8 @@ def main():
 
     vr = sub.add_parser("video-review", help="LLM quality review of videos")
     vr.add_argument("--limit", type=int, default=None, help="Max videos to review")
-    vr.add_argument("--model", default="claude-haiku-4-5-20251001",
-                    help="Anthropic model to use (default: claude-haiku-4-5-20251001)")
+    vr.add_argument("--model", default=config.OPENAI_MODEL,
+                    help="Model to use (default: %(default)s)")
     vr.add_argument("--scope", choices=["unreviewed", "upgrade", "all"],
                     default="unreviewed",
                     help="unreviewed=new only, upgrade=re-review items from a lower model, all=everything")

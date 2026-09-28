@@ -89,17 +89,33 @@ TEMPLATES = [
 
 WSGI_APPLICATION = "soogle_web.wsgi.application"
 
-DATABASES = {
-    "default": {
-        "ENGINE": "django.db.backends.mysql",
-        "NAME": os.environ.get("SOOGLE_DB_NAME", "soogle"),
-        "USER": os.environ.get("SOOGLE_DB_USER", "root"),
-        "PASSWORD": _required("SOOGLE_DB_PASS"),
-        "HOST": os.environ.get("SOOGLE_DB_HOST", "127.0.0.1"),
-        "PORT": os.environ.get("SOOGLE_DB_PORT", "3306"),
-        "OPTIONS": {"charset": "utf8mb4"},
+def _db_engine():
+    """MySQL if SOOGLE_DB_PASS is set, else SQLite.  SOOGLE_DB_ENGINE overrides."""
+    engine = os.environ.get("SOOGLE_DB_ENGINE")
+    if engine:
+        return engine
+    return "mysql" if os.environ.get("SOOGLE_DB_PASS") else "sqlite"
+
+
+if _db_engine() == "sqlite":
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.sqlite3",
+            "NAME": os.environ.get("SOOGLE_DB_PATH", str(BASE_DIR.parent / "soogle.db")),
+        }
     }
-}
+else:
+    DATABASES = {
+        "default": {
+            "ENGINE": "django.db.backends.mysql",
+            "NAME": os.environ.get("SOOGLE_DB_NAME", "soogle"),
+            "USER": os.environ.get("SOOGLE_DB_USER", "root"),
+            "PASSWORD": _required("SOOGLE_DB_PASS"),
+            "HOST": os.environ.get("SOOGLE_DB_HOST", "127.0.0.1"),
+            "PORT": os.environ.get("SOOGLE_DB_PORT", "3306"),
+            "OPTIONS": {"charset": "utf8mb4"},
+        }
+    }
 
 LANGUAGE_CODE = "en-us"
 TIME_ZONE = "UTC"
