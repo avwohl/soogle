@@ -1,0 +1,52 @@
+name: Weekly scrape + DB release
+
+on:
+  schedule:
+    - cron: "0 3 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  weekly:
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v5
+
+      - name: Restore previous DB
+        run: gh release download --pattern "soogle.db" --clobber || echo "No previous release, starting fresh"
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Run weekly.bash
+        run: bash weekly.bash
+        env:
+          SOOGLE_DB_ENGINE: sqlite
+          SOOGLE_DB_PATH: soogle.db
+          SERPAPI_KEY: ${{ secrets.SERPAPI_KEY }}
+GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          BRAVE_API_KEY: ${{ secrets.BRAVE_API_KEY }}
+          BING_API_KEY: ${{ secrets.BING_API_KEY }}
+
+      - name: Dump DB to parquet
+        run: uv run --group dump python scripts/dump_parquet.py soogle.db dist
+
+      - name: Set release tag
+        id: tag
+        run: echo "tag=db-$(date +%Y-%m-%d)" >> "$GITHUB_OUTPUT"
+
+      - name: Create release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.tag.outputs.tag }}
+          name: Database dump ${{ steps.tag.outputs.tag }}
+          body: Weekly SQLite dump as one parquet file per table.
+          files: |
+            dist/*.parquet
+            soogle.db
+          fail_on_unmatched_files: true

@@ -1,0 +1,31 @@
+min_version = "2024.9.5"
+
+[tools]
+uv = "latest"
+ruff = "latest"
+prek = { version = "latest", postinstall = "prek install" }
+
+[tasks.install]
+description = "Install/update all dependencies"
+alias = "i"
+run = "uv sync"
+
+[tasks.scrape]
+description = "Run the scraper"
+run = "uv run python -m scrape"
+
+[tasks.server]
+description = "Run the Django web app"
+run = "uv run python web/manage.py runserver"
+
+[tasks.test]
+description = "Run tests"
+run = "uv run python tests/test_monticello.py"
+
+[tasks.lint]
+description = "Lint with ruff"
+run = "ruff check ."
+
+[tasks.hooks]
+description = "Run all git hooks"
+run = "prek run"
