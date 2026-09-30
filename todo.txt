@@ -91,7 +91,7 @@ filtered as not Smalltalk.  process and llm-review ran after it: 106 new
 packages reviewed, 66 kept, 40 blocked.  Use --since again whenever the
 incremental run has been broken for more than 30 days.
 
-README.md:162 and notes.txt:18 still call the variable GITHUB_TOKEN; the code
+README.md:26 and notes.txt:18 still call the variable GITHUB_TOKEN; the code
 reads GH_TOKEN (scrape/config.py:56).
 
 
