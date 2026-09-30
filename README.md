@@ -23,7 +23,7 @@ Soogle indexes Smalltalk packages from repositories across multiple dialects (Ph
 Environment variables:
 
 - `SOOGLE_DB_PASS` — MySQL password
-- `GITHUB_TOKEN` — GitHub API token (required for github scraper)
+- `GH_TOKEN` — GitHub API token (required for github scraper)
 - `SERPAPI_KEY` — SerpAPI key (required for weekly.bash: discovery + youtube)
 - `ANTHROPIC_API_KEY` — Anthropic API key (required for LLM review, analyze)
 

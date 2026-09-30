@@ -15,7 +15,7 @@
                                                                                                  
   CLI                                           
                                                                                                  
-  python -m scrape github [--incremental]     # GitHub (needs GITHUB_TOKEN env var)              
+  python -m scrape github [--incremental]     # GitHub (needs GH_TOKEN env var)                  
   python -m scrape web squeaksource           # SqueakSource                                     
   python -m scrape web smalltalkhub           # SmalltalkHub                                     
   python -m scrape web rosettacode            # Rosetta Code                                     

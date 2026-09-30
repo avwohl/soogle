@@ -60,7 +60,7 @@ class GitHubScraper:
         if config.GITHUB_TOKEN:
             self.session.headers["Authorization"] = f"Bearer {config.GITHUB_TOKEN}"
         else:
-            log.warning("No GITHUB_TOKEN set -- rate limits will be very restrictive (60 req/hr)")
+            log.warning("No GH_TOKEN set -- rate limits will be very restrictive (60 req/hr)")
 
         self.site_id = db.get_site_id(conn, "github")
 
