@@ -6,7 +6,8 @@
 soogle/
   daily.bash              Daily cron script (free scrapers + processing)
   weekly.bash             Weekly cron script (paid APIs + daily.bash)
-  requirements.txt        requests, pymysql, beautifulsoup4
+  pyproject.toml          Python dependencies (requests, pymysql, beautifulsoup4, ...)
+  requirements.txt        -e . (points pip at pyproject.toml)
   db/schema.sql           Full database schema and seed data
   scrape/
     __main__.py           CLI entry point (python -m scrape <command>)

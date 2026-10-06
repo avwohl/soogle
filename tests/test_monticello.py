@@ -122,7 +122,17 @@ check("1 version." in describe("A", "r", "h", {"latest": "A-x.1.mcz", "count": 1
       "one version is not called '1 versions'")
 
 
-print("\n" + "=" * 60)
-failed = results.count(False)
-print(f"Results: {results.count(True)} passed, {failed} failed")
-sys.exit(1 if failed else 0)
+
+
+# pytest entry point.  The checks above run when pytest imports this file;
+# the sys.exit below must not, or pytest dies with INTERNALERROR (which is
+# how `sync-repos.sh --test` would see it).
+def test_monticello():
+    assert all(results), f"{results.count(False)} check(s) failed; see the FAIL lines"
+
+
+if __name__ == "__main__":
+    print("\n" + "=" * 60)
+    failed = results.count(False)
+    print(f"Results: {results.count(True)} passed, {failed} failed")
+    sys.exit(1 if failed else 0)

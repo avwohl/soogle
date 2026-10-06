@@ -18,7 +18,7 @@ Soogle indexes Smalltalk packages from repositories across multiple dialects (Ph
 
 - Python 3.10+
 - MySQL / MariaDB
-- `pip install -r requirements.txt` (requests, pymysql, beautifulsoup4)
+- `pip install -e .` from the soogle directory (`pyproject.toml` has the package list)
 
 Environment variables:
 

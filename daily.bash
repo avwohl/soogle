@@ -39,7 +39,7 @@ fi
 if ! deps=$("$PYTHON_BIN" -c 'import requests, pymysql, bs4, anthropic' 2>&1); then
     log "FATAL: $PYTHON_BIN cannot import the required modules:"
     printf '%s\n' "$deps" | sed 's/^/    /'
-    log "FATAL: try: $PYTHON_BIN -m pip install -r requirements.txt"
+    log "FATAL: try: (cd $PWD && $PYTHON_BIN -m pip install --user --break-system-packages -e .)"
     exit 1
 fi
 

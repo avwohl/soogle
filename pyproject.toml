@@ -1,0 +1,34 @@
+# soogle is not a library; nothing imports it from outside this checkout and
+# the cron scripts run `python -m scrape` from here.  This file exists so the
+# dependency list lives in one place and so ~/bin/sync-repos.sh, which installs
+# every repo that has a pyproject.toml, puts the dependencies back after the
+# user site (~/.local) is wiped.  That wipe happened on 2026-09-30 and broke
+# the 2026-10-06 weekly run: requirements.txt alone was invisible to
+# sync-repos.sh.
+
+[build-system]
+requires = ["setuptools>=61"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "soogle"
+version = "0.1.0"
+description = "Smalltalk code search engine: scrapers, LLM review pipeline, search UI"
+requires-python = ">=3.10"
+license = { text = "GPL-3.0" }
+dependencies = [
+    "requests>=2.31",
+    "pymysql>=1.1",
+    "beautifulsoup4>=4.12",
+    "python-dotenv>=1.0",
+    "anthropic>=0.40",
+]
+
+[project.optional-dependencies]
+dev = ["pytest"]
+
+# Install no packages, only the dependencies.  Exporting `scrape` as a
+# top-level name into the shared user site would shadow any other `scrape`
+# module, and the scripts do not need it: they run from this directory.
+[tool.setuptools]
+packages = []
